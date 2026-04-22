@@ -1,0 +1,16 @@
+node_modules/
+.expo/
+dist/
+npm-debug.*
+*.jks
+*.p12
+*.key
+*.mobileprovision
+*.orig.*
+web-build/
+.DS_Store
+.env*
+!.env.example
+ios/
+android/
+*.tsbuildinfo
