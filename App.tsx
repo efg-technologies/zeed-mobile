@@ -2,7 +2,8 @@
 // Multi-tab WebView + bottom-sheet chat. Agent path A (local JS injection)
 // is the default; path B (cloud autopilot) is opt-in via settings.
 
-import { useCallback, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import {
   ActivityIndicator, Image, KeyboardAvoidingView, Platform, Pressable, SafeAreaView,
   ScrollView, StyleSheet, Text, TextInput, View,
@@ -30,6 +31,10 @@ import {
   KEYS, setSecureBackend, getSecret, setSecret,
   type SecureBackend,
 } from './src/storage/secure.ts';
+import {
+  loadBookmarks, saveBookmarks, isBookmarked, toggleBookmark,
+  type Bookmark,
+} from './src/storage/bookmarks.ts';
 
 const secureStoreBackend: SecureBackend = {
   getItemAsync: (k) => SecureStore.getItemAsync(k),
@@ -73,6 +78,21 @@ export default function App() {
   const [messages, setMessages] = useState<Msg[]>([]);
   const [sheetOpen, setSheetOpen] = useState(true);
   const [busy, setBusy] = useState(false);
+  const [bookmarks, setBookmarks] = useState<Bookmark[]>([]);
+
+  useEffect(() => {
+    loadBookmarks(AsyncStorage).then(setBookmarks).catch(() => { /* ignore */ });
+  }, []);
+
+  const toggleCurrentBookmark = useCallback(() => {
+    setBookmarks((prev) => {
+      const next = toggleBookmark(prev, active.url, active.title || active.url, Date.now());
+      saveBookmarks(AsyncStorage, next).catch(() => { /* ignore */ });
+      return next;
+    });
+  }, [active.url, active.title]);
+
+  const activeBookmarked = isBookmarked(bookmarks, active.url);
   const pendingObs = useRef<((o: PageObservation) => void) | null>(null);
 
   const updateTab = useCallback((id: string, patch: Partial<Tab>) => {
@@ -197,6 +217,20 @@ export default function App() {
     setTabListOpen(false);
   }, []);
 
+  const openBookmark = useCallback((b: Bookmark) => {
+    updateTab(activeId, { url: b.url });
+    setUrlInput(b.url);
+    setTabListOpen(false);
+  }, [activeId, updateTab]);
+
+  const removeBookmarkAt = useCallback((url: string) => {
+    setBookmarks((prev) => {
+      const next = prev.filter((x) => x.url !== url);
+      saveBookmarks(AsyncStorage, next).catch(() => { /* ignore */ });
+      return next;
+    });
+  }, []);
+
   const switchTab = useCallback((id: string) => {
     setActiveId(id);
     const t = tabs.find((x) => x.id === id);
@@ -267,6 +301,11 @@ export default function App() {
             placeholderTextColor="#666"
             selectTextOnFocus
           />
+          <Pressable onPress={toggleCurrentBookmark} style={styles.navBtn}>
+            <Text style={[styles.navBtnText, activeBookmarked && styles.navBtnAccent]}>
+              {activeBookmarked ? '★' : '☆'}
+            </Text>
+          </Pressable>
           <Pressable onPress={() => setTabListOpen((v) => !v)} style={styles.tabPill}>
             <Text style={styles.tabPillText}>{tabs.length}</Text>
           </Pressable>
@@ -281,6 +320,7 @@ export default function App() {
         )}
         {tabListOpen && (
           <ScrollView style={styles.tabList} contentContainerStyle={styles.tabListContent}>
+            <Text style={styles.tabListHeader}>Tabs</Text>
             {tabs.map((t) => {
               const favicon = faviconFor(t.url);
               return (
@@ -303,6 +343,38 @@ export default function App() {
                     <Text style={styles.tabCardUrl} numberOfLines={1}>{t.url}</Text>
                   </View>
                   <Pressable onPress={() => closeTab(t.id)} style={styles.tabClose} hitSlop={8}>
+                    <Text style={styles.tabCloseText}>✕</Text>
+                  </Pressable>
+                </Pressable>
+              );
+            })}
+            {bookmarks.length > 0 && (
+              <Text style={styles.tabListHeader}>Bookmarks</Text>
+            )}
+            {bookmarks.map((b) => {
+              const favicon = faviconFor(b.url);
+              return (
+                <Pressable
+                  key={`bm:${b.url}`}
+                  onPress={() => openBookmark(b)}
+                  style={styles.tabCard}
+                >
+                  <View style={styles.tabCardThumb}>
+                    {favicon ? (
+                      <Image source={{ uri: favicon }} style={styles.tabCardFavicon} />
+                    ) : (
+                      <Text style={styles.tabCardThumbPlaceholder}>★</Text>
+                    )}
+                  </View>
+                  <View style={styles.tabCardBody}>
+                    <Text style={styles.tabCardTitle} numberOfLines={1}>{b.title}</Text>
+                    <Text style={styles.tabCardUrl} numberOfLines={1}>{b.url}</Text>
+                  </View>
+                  <Pressable
+                    onPress={() => removeBookmarkAt(b.url)}
+                    style={styles.tabClose}
+                    hitSlop={8}
+                  >
                     <Text style={styles.tabCloseText}>✕</Text>
                   </Pressable>
                 </Pressable>
@@ -381,6 +453,7 @@ const styles = StyleSheet.create({
   },
   navBtnText: { color: '#fff', fontSize: 18 },
   navBtnDisabled: { color: '#444' },
+  navBtnAccent: { color: '#5B21B6' },
   urlInput: {
     flex: 1, color: '#fff', backgroundColor: '#0F0F12',
     borderRadius: 8, paddingHorizontal: 10, paddingVertical: 6, fontSize: 13,
@@ -399,6 +472,11 @@ const styles = StyleSheet.create({
     borderBottomWidth: 1, borderBottomColor: '#2A2A30',
   },
   tabListContent: { padding: 8, gap: 8 },
+  tabListHeader: {
+    color: '#888', fontSize: 11, fontWeight: '600',
+    textTransform: 'uppercase', letterSpacing: 0.8,
+    marginTop: 4, marginBottom: 2, paddingHorizontal: 4,
+  },
   tabCard: {
     flexDirection: 'row', alignItems: 'center',
     backgroundColor: '#0F0F12', borderRadius: 10, padding: 10, gap: 10,
