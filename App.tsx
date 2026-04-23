@@ -4,7 +4,7 @@
 
 import { useCallback, useMemo, useRef, useState } from 'react';
 import {
-  ActivityIndicator, KeyboardAvoidingView, Platform, Pressable, SafeAreaView,
+  ActivityIndicator, Image, KeyboardAvoidingView, Platform, Pressable, SafeAreaView,
   ScrollView, StyleSheet, Text, TextInput, View,
 } from 'react-native';
 import { WebView, type WebViewMessageEvent, type WebViewNavigation } from 'react-native-webview';
@@ -14,6 +14,16 @@ import {
   buildClickByLabelJs, buildClickBySelectorJs, buildReadPageJs,
 } from './src/webview/bridge.ts';
 import { normalizeUrlOrSearch } from './src/webview/url.ts';
+
+function faviconFor(u: string): string | null {
+  try {
+    const host = new URL(u).hostname;
+    if (!host) return null;
+    return `https://www.google.com/s2/favicons?sz=64&domain=${host}`;
+  } catch {
+    return null;
+  }
+}
 import { chat } from './src/llm/openrouter.ts';
 import { runAgent, type AgentAction, type PageObservation } from './src/agent/loop.ts';
 import {
@@ -257,8 +267,8 @@ export default function App() {
             placeholderTextColor="#666"
             selectTextOnFocus
           />
-          <Pressable onPress={() => setTabListOpen((v) => !v)} style={styles.navBtn}>
-            <Text style={styles.navBtnText}>{tabs.length}</Text>
+          <Pressable onPress={() => setTabListOpen((v) => !v)} style={styles.tabPill}>
+            <Text style={styles.tabPillText}>{tabs.length}</Text>
           </Pressable>
           <Pressable onPress={openNewTab} style={styles.navBtn}>
             <Text style={styles.navBtnText}>＋</Text>
@@ -270,22 +280,34 @@ export default function App() {
           </View>
         )}
         {tabListOpen && (
-          <ScrollView style={styles.tabList}>
-            {tabs.map((t) => (
-              <View key={t.id} style={styles.tabRow}>
-                <Pressable onPress={() => switchTab(t.id)} style={styles.tabRowMain}>
-                  <Text
-                    style={[styles.tabRowText, t.id === activeId && styles.tabRowActive]}
-                    numberOfLines={1}
-                  >
-                    {t.title || t.url}
-                  </Text>
+          <ScrollView style={styles.tabList} contentContainerStyle={styles.tabListContent}>
+            {tabs.map((t) => {
+              const favicon = faviconFor(t.url);
+              return (
+                <Pressable
+                  key={t.id}
+                  onPress={() => switchTab(t.id)}
+                  style={[styles.tabCard, t.id === activeId && styles.tabCardActive]}
+                >
+                  <View style={styles.tabCardThumb}>
+                    {favicon ? (
+                      <Image source={{ uri: favicon }} style={styles.tabCardFavicon} />
+                    ) : (
+                      <Text style={styles.tabCardThumbPlaceholder}>?</Text>
+                    )}
+                  </View>
+                  <View style={styles.tabCardBody}>
+                    <Text style={styles.tabCardTitle} numberOfLines={1}>
+                      {t.title || t.url}
+                    </Text>
+                    <Text style={styles.tabCardUrl} numberOfLines={1}>{t.url}</Text>
+                  </View>
+                  <Pressable onPress={() => closeTab(t.id)} style={styles.tabClose} hitSlop={8}>
+                    <Text style={styles.tabCloseText}>✕</Text>
+                  </Pressable>
                 </Pressable>
-                <Pressable onPress={() => closeTab(t.id)} style={styles.tabClose}>
-                  <Text style={styles.tabCloseText}>✕</Text>
-                </Pressable>
-              </View>
-            ))}
+              );
+            })}
           </ScrollView>
         )}
         <View style={styles.webWrap}>
@@ -305,6 +327,11 @@ export default function App() {
                 originWhitelist={['*']}
                 javaScriptEnabled
                 domStorageEnabled
+                allowsBackForwardNavigationGestures
+                decelerationRate="normal"
+                contentInsetAdjustmentBehavior="automatic"
+                overScrollMode="always"
+                nestedScrollEnabled
               />
             </View>
           ))}
@@ -361,19 +388,33 @@ const styles = StyleSheet.create({
   progressBar: {
     height: 2, backgroundColor: '#5B21B6',
   },
+  tabPill: {
+    minWidth: 28, height: 28, borderRadius: 6,
+    backgroundColor: '#2A2A30', justifyContent: 'center', alignItems: 'center',
+    paddingHorizontal: 8,
+  },
+  tabPillText: { color: '#fff', fontSize: 13, fontWeight: '600' },
   tabList: {
-    maxHeight: 200, backgroundColor: '#1A1A1F',
+    maxHeight: 280, backgroundColor: '#1A1A1F',
     borderBottomWidth: 1, borderBottomColor: '#2A2A30',
   },
-  tabRow: {
+  tabListContent: { padding: 8, gap: 8 },
+  tabCard: {
     flexDirection: 'row', alignItems: 'center',
-    paddingHorizontal: 12, paddingVertical: 10,
-    borderBottomWidth: 1, borderBottomColor: '#2A2A30',
+    backgroundColor: '#0F0F12', borderRadius: 10, padding: 10, gap: 10,
+    borderWidth: 1, borderColor: '#2A2A30',
   },
-  tabRowMain: { flex: 1 },
-  tabRowText: { color: '#ccc', fontSize: 14 },
-  tabRowActive: { color: '#fff', fontWeight: '600' },
-  tabClose: { paddingHorizontal: 10 },
+  tabCardActive: { borderColor: '#5B21B6' },
+  tabCardThumb: {
+    width: 44, height: 44, borderRadius: 8, backgroundColor: '#2A2A30',
+    justifyContent: 'center', alignItems: 'center',
+  },
+  tabCardFavicon: { width: 28, height: 28 },
+  tabCardThumbPlaceholder: { color: '#666', fontSize: 18 },
+  tabCardBody: { flex: 1 },
+  tabCardTitle: { color: '#fff', fontSize: 14, fontWeight: '500' },
+  tabCardUrl: { color: '#888', fontSize: 11, marginTop: 2 },
+  tabClose: { paddingHorizontal: 6, paddingVertical: 4 },
   tabCloseText: { color: '#888', fontSize: 14 },
   webWrap: { flex: 1, position: 'relative' },
   webLayer: { position: 'absolute', top: 0, left: 0, right: 0, bottom: 0 },
