@@ -9,6 +9,7 @@
     "ios": "expo start --ios",
     "lint": "expo lint",
     "test": "node --experimental-strip-types --test 'src/**/*.test.ts'",
+    "test:unit": "node --experimental-strip-types --test 'src/**/*.test.ts'",
     "test:watch": "node --experimental-strip-types --test --watch 'src/**/*.test.ts'",
     "typecheck": "tsc --noEmit"
   },
@@ -26,6 +27,7 @@
   "devDependencies": {
     "@expo/config-plugins": "~9.0.0",
     "@types/react": "~18.3.12",
+    "hono": "^4.12.14",
     "typescript": "~5.7.0"
   },
   "engines": {
