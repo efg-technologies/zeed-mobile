@@ -35,6 +35,10 @@ import {
   loadBookmarks, saveBookmarks, isBookmarked, toggleBookmark,
   type Bookmark,
 } from './src/storage/bookmarks.ts';
+import {
+  loadHistory, saveHistory, recordVisit, searchHistory,
+  type HistoryEntry,
+} from './src/storage/history.ts';
 
 const secureStoreBackend: SecureBackend = {
   getItemAsync: (k) => SecureStore.getItemAsync(k),
@@ -79,9 +83,12 @@ export default function App() {
   const [sheetOpen, setSheetOpen] = useState(true);
   const [busy, setBusy] = useState(false);
   const [bookmarks, setBookmarks] = useState<Bookmark[]>([]);
+  const [history, setHistory] = useState<HistoryEntry[]>([]);
+  const [urlFocused, setUrlFocused] = useState(false);
 
   useEffect(() => {
     loadBookmarks(AsyncStorage).then(setBookmarks).catch(() => { /* ignore */ });
+    loadHistory(AsyncStorage).then(setHistory).catch(() => { /* ignore */ });
   }, []);
 
   const toggleCurrentBookmark = useCallback(() => {
@@ -93,11 +100,23 @@ export default function App() {
   }, [active.url, active.title]);
 
   const activeBookmarked = isBookmarked(bookmarks, active.url);
+
   const pendingObs = useRef<((o: PageObservation) => void) | null>(null);
 
   const updateTab = useCallback((id: string, patch: Partial<Tab>) => {
     setTabs((ts) => ts.map((t) => (t.id === id ? { ...t, ...patch } : t)));
   }, []);
+
+  const suggestions = useMemo(
+    () => (urlFocused ? searchHistory(history, urlInput, 6) : []),
+    [urlFocused, history, urlInput],
+  );
+
+  const pickSuggestion = useCallback((h: HistoryEntry) => {
+    updateTab(activeId, { url: h.url });
+    setUrlInput(h.url);
+    setUrlFocused(false);
+  }, [activeId, updateTab]);
 
   const observe = useCallback((): Promise<PageObservation> => {
     return new Promise((resolve) => {
@@ -156,8 +175,15 @@ export default function App() {
       canGoBack: s.canGoBack,
       canGoForward: s.canGoForward,
     });
-    if (tabId === activeId) setUrlInput(s.url);
-  }, [activeId, updateTab]);
+    if (tabId === activeId && !urlFocused) setUrlInput(s.url);
+    if (!s.loading && s.url && /^https?:/i.test(s.url)) {
+      setHistory((prev) => {
+        const next = recordVisit(prev, s.url, s.title || s.url, Date.now());
+        saveHistory(AsyncStorage, next).catch(() => { /* ignore */ });
+        return next;
+      });
+    }
+  }, [activeId, urlFocused, updateTab]);
 
   const runTask = useCallback(async () => {
     const goal = chatInput.trim();
@@ -295,6 +321,8 @@ export default function App() {
             value={urlInput}
             onChangeText={setUrlInput}
             onSubmitEditing={onUrlSubmit}
+            onFocus={() => setUrlFocused(true)}
+            onBlur={() => setUrlFocused(false)}
             autoCapitalize="none"
             autoCorrect={false}
             placeholder="search or enter URL"
@@ -316,6 +344,30 @@ export default function App() {
         {active.loading && (
           <View style={styles.progressBar}>
             <ActivityIndicator size="small" color="#5B21B6" />
+          </View>
+        )}
+        {suggestions.length > 0 && (
+          <View style={styles.suggestions}>
+            {suggestions.map((h) => {
+              const favicon = faviconFor(h.url);
+              return (
+                <Pressable
+                  key={`sugg:${h.url}`}
+                  onPress={() => pickSuggestion(h)}
+                  style={styles.suggestionRow}
+                >
+                  {favicon ? (
+                    <Image source={{ uri: favicon }} style={styles.suggestionFavicon} />
+                  ) : (
+                    <View style={styles.suggestionFaviconFallback} />
+                  )}
+                  <View style={styles.suggestionBody}>
+                    <Text style={styles.suggestionTitle} numberOfLines={1}>{h.title}</Text>
+                    <Text style={styles.suggestionUrl} numberOfLines={1}>{h.url}</Text>
+                  </View>
+                </Pressable>
+              );
+            })}
           </View>
         )}
         {tabListOpen && (
@@ -461,6 +513,20 @@ const styles = StyleSheet.create({
   progressBar: {
     height: 2, backgroundColor: '#5B21B6',
   },
+  suggestions: {
+    backgroundColor: '#1A1A1F',
+    borderBottomWidth: 1, borderBottomColor: '#2A2A30',
+  },
+  suggestionRow: {
+    flexDirection: 'row', alignItems: 'center', gap: 10,
+    paddingHorizontal: 12, paddingVertical: 8,
+    borderBottomWidth: 1, borderBottomColor: '#2A2A30',
+  },
+  suggestionFavicon: { width: 18, height: 18 },
+  suggestionFaviconFallback: { width: 18, height: 18, backgroundColor: '#2A2A30', borderRadius: 4 },
+  suggestionBody: { flex: 1 },
+  suggestionTitle: { color: '#fff', fontSize: 13 },
+  suggestionUrl: { color: '#888', fontSize: 11, marginTop: 1 },
   tabPill: {
     minWidth: 28, height: 28, borderRadius: 6,
     backgroundColor: '#2A2A30', justifyContent: 'center', alignItems: 'center',
