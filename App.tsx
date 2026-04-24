@@ -56,6 +56,7 @@ import {
 } from './src/storage/settings.ts';
 import { rankSuggestions, type Suggestion } from './src/search/rank.ts';
 import { fetchGoogleSuggestions } from './src/search/google.ts';
+import { resolveShortcut } from './src/search/shortcut.ts';
 import {
   logger, getLogs, clearLogs, subscribe as subscribeLogs, withTimeout,
   type LogEntry,
@@ -175,13 +176,19 @@ export default function App() {
     return () => { clearTimeout(t); ctrl.abort(); };
   }, [urlFocused, urlInput, settings.googleSuggestEnabled]);
 
+  const shortcutUrl = useMemo(
+    () => resolveShortcut(urlInput, { bookmarks, likes, history }),
+    [urlInput, bookmarks, likes, history],
+  );
+
   const suggestions: Suggestion[] = useMemo(
     () => (urlFocused
       ? rankSuggestions({
-        query: urlInput, bookmarks, likes, history, googleSuggestions: googleSugg, limit: 8,
+        query: urlInput, bookmarks, likes, history, googleSuggestions: googleSugg,
+        shortcutUrl, limit: 8,
       })
       : []),
-    [urlFocused, urlInput, bookmarks, likes, history, googleSugg],
+    [urlFocused, urlInput, bookmarks, likes, history, googleSugg, shortcutUrl],
   );
 
   const pickSuggestion = useCallback((s: Suggestion) => {
@@ -339,25 +346,25 @@ export default function App() {
   }, [urlInput, runTaskWith]);
 
   const onUrlSubmit = useCallback(() => {
-    const normalized = normalizeUrlOrSearch(urlInput);
-    updateTab(activeId, { url: normalized });
-    setUrlInput(normalized);
+    const target = shortcutUrl ?? normalizeUrlOrSearch(urlInput);
+    updateTab(activeId, { url: target });
+    setUrlInput(target);
     setUrlFocused(false);
-  }, [urlInput, activeId, updateTab]);
+  }, [urlInput, shortcutUrl, activeId, updateTab]);
 
-  // Auto mode: URL-like → navigate; else → agent.
+  // Auto mode: URL-like or known shortcut → navigate; else → agent.
   // Ask mode: always navigate/search (agent triggered only by explicit button).
   const onOmniboxPrimary = useCallback(() => {
     const q = urlInput.trim();
     if (!q) return;
     if (mode === 'auto') {
       const urlLike = /^https?:\/\//i.test(q) || /^[^\s]+\.[a-z]{2,}(\/|$)/i.test(q);
-      if (urlLike) onUrlSubmit();
+      if (urlLike || shortcutUrl) onUrlSubmit();
       else runAskFromOmnibox();
     } else {
       onUrlSubmit();
     }
-  }, [mode, urlInput, onUrlSubmit, runAskFromOmnibox]);
+  }, [mode, urlInput, shortcutUrl, onUrlSubmit, runAskFromOmnibox]);
 
   const updateSettings = useCallback(async (patch: Partial<Settings>) => {
     setSettings((prev) => {

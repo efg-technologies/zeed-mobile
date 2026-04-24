@@ -30,6 +30,8 @@ export interface RankInput {
   likes: Like[];
   history: HistoryEntry[];
   googleSuggestions: string[];
+  /** Pre-resolved single-word shortcut URL (e.g. "google" → google.com). */
+  shortcutUrl?: string | null;
   limit?: number;
 }
 
@@ -48,15 +50,24 @@ export function rankSuggestions(input: RankInput): Suggestion[] {
 
   const out: Suggestion[] = [];
 
-  // 1. Direct URL / search intent. Always offered as the top entry so
-  //    pressing return is deterministic even mid-query.
-  const normalized = normalizeUrlOrSearch(q);
-  out.push({
-    source: 'direct',
-    url: normalized,
-    title: looksLikeUrl(q) ? 'Go to site' : `Search Google for "${q}"`,
-    subtitle: normalized,
-  });
+  // 1. Direct URL / search / shortcut intent. Always offered as the top entry
+  //    so pressing return is deterministic even mid-query.
+  if (input.shortcutUrl) {
+    out.push({
+      source: 'direct',
+      url: input.shortcutUrl,
+      title: `Go to ${hostnameOfUrl(input.shortcutUrl)}`,
+      subtitle: input.shortcutUrl,
+    });
+  } else {
+    const normalized = normalizeUrlOrSearch(q);
+    out.push({
+      source: 'direct',
+      url: normalized,
+      title: looksLikeUrl(q) ? 'Go to site' : `Search Google for "${q}"`,
+      subtitle: normalized,
+    });
+  }
 
   // 2. Bookmarks (substring match on url / title).
   for (const b of filterByQuery(input.bookmarks, q)) {
@@ -93,6 +104,11 @@ function filterByQuery<T extends { url: string; title: string }>(
 
 function looksLikeUrl(s: string): boolean {
   return /^https?:\/\//i.test(s) || /^[^\s]+\.[a-z]{2,}(\/.*)?$/i.test(s);
+}
+
+function hostnameOfUrl(u: string): string {
+  const m = /^https?:\/\/([^/?#]+)/i.exec(u);
+  return (m?.[1] ?? u).replace(/^www\./, '');
 }
 
 /**

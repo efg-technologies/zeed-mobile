@@ -102,6 +102,15 @@ test('google suggestions: URL is google search', () => {
   assert.equal(g.title, 'foo bar');
 });
 
+test('shortcutUrl replaces direct entry', () => {
+  const r = rankSuggestions({
+    ...base(), query: 'google', shortcutUrl: 'https://www.google.com',
+  });
+  assert.equal(r[0]!.source, 'direct');
+  assert.equal(r[0]!.url, 'https://www.google.com');
+  assert.ok(r[0]!.title.includes('google.com'));
+});
+
 test('case-insensitive matching for bookmarks', () => {
   const r = rankSuggestions({
     ...base(),
