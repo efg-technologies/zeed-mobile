@@ -159,6 +159,8 @@ function AppBody() {
   const [logsOpen, setLogsOpen] = useState(false);
   const [mode, setMode] = useState<'auto' | 'ask' | 'search'>('auto');
   const [privateMode, setPrivateMode] = useState(false);
+  const privateModeRef = useRef(false);
+  privateModeRef.current = privateMode;
 
   useEffect(() => {
     if (!busy) { setDots(''); return; }
@@ -216,7 +218,7 @@ function AppBody() {
   activeRef.current = active;
 
   const telFeature = useCallback((f: FeatureCode) => {
-    if (activeRef.current?.private) return;
+    if (privateModeRef.current || activeRef.current?.private) return;
     sendFeatureUsed(telemetryDeps, f).catch(() => { /* ignore */ });
   }, [telemetryDeps]);
 
@@ -383,14 +385,15 @@ function AppBody() {
     });
     if (tabId === activeId && !urlFocused) setUrlInput(s.url);
     const tab = tabs.find((t) => t.id === tabId);
-    if (!tab?.private && !s.loading && s.url && /^https?:/i.test(s.url)) {
+    const isPrivate = privateMode || tab?.private;
+    if (!isPrivate && !s.loading && s.url && /^https?:/i.test(s.url)) {
       setHistory((prev) => {
         const next = recordVisit(prev, s.url, s.title || s.url, Date.now());
         saveHistory(AsyncStorage, next).catch(() => { /* ignore */ });
         return next;
       });
     }
-  }, [activeId, urlFocused, updateTab, tabs]);
+  }, [activeId, urlFocused, updateTab, tabs, privateMode]);
 
   const runTaskWith = useCallback(async (goalRaw: string) => {
     const goal = goalRaw.trim();
@@ -462,7 +465,7 @@ function AppBody() {
         },
       });
       logger.info(`agent end: ok=${result.ok} ${result.error ?? ''}`);
-      if (!activeRef.current?.private) {
+      if (!privateModeRef.current && !activeRef.current?.private) {
         sendAgentRun(telemetryDeps, {
           success: result.ok,
           stepCount: result.steps.length,
@@ -478,7 +481,7 @@ function AppBody() {
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e);
       logger.error(`agent threw: ${msg}`);
-      if (!activeRef.current?.private) {
+      if (!privateModeRef.current && !activeRef.current?.private) {
         sendAgentRun(telemetryDeps, { success: false, stepCount: 0, endReason: 'error' })
           .catch(() => { /* ignore */ });
       }
@@ -543,6 +546,44 @@ function AppBody() {
     setLikes([]);
     saveLikes(AsyncStorage, []).catch(() => { /* ignore */ });
   }, []);
+
+  const changePrivateMode = useCallback((next: boolean) => {
+    const wasPrivate = privateModeRef.current;
+    setPrivateMode(next);
+    if (wasPrivate && !next) {
+      // Exiting private: wipe everything that existed during the session.
+      // Tabs that were explicitly private, the chat history, the debug log
+      // ring buffer, the current suggestions, and any in-flight input. The
+      // WebView key flip above will also drop each WKWebView's
+      // nonPersistent store so cookies / session data vanish.
+      logger.info('private: session ended, wiping ephemeral state');
+      setMessages([]);
+      setChatPanelOpen(false);
+      setLastStep(null);
+      setPrevStep(null);
+      setUrlInput('');
+      setUrlFocused(false);
+      setGoogleSugg([]);
+      setTabs((ts) => {
+        const survivors = ts.filter((t) => !t.private);
+        if (survivors.length === 0) {
+          const fresh = newTab();
+          setActiveId(fresh.id);
+          setUrlInput(fresh.url);
+          return [fresh];
+        }
+        if (!survivors.some((t) => t.id === activeId)) {
+          const first = survivors[0]!;
+          setActiveId(first.id);
+          setUrlInput(first.url);
+        }
+        return survivors;
+      });
+      // Clear logs LAST so the 'session ended' line above is retained for
+      // one render before wipe — then immediately drop the buffer.
+      clearLogs();
+    }
+  }, [activeId]);
 
   const shareActivePage = useCallback(async () => {
     const url = active.url;
@@ -633,11 +674,11 @@ function AppBody() {
         style={styles.flex1}
       >
         <Pressable
-          style={[styles.topBar, active.private && styles.topBarPrivate]}
+          style={[styles.topBar, (active.private || privateMode) && styles.topBarPrivate]}
           onLongPress={shareActivePage}
           delayLongPress={350}
         >
-          {active.private && (
+          {(active.private || privateMode) && (
             <Text style={styles.topPrivate}>PRIVATE  </Text>
           )}
           <Text style={styles.topHost} numberOfLines={1}>{hostnameOf(active.url)}</Text>
@@ -653,7 +694,7 @@ function AppBody() {
               pointerEvents={t.id === activeId ? 'auto' : 'none'}
             >
               <WebView
-                key={`${t.id}:${t.private ? 'p' : 'n'}`}
+                key={`${t.id}:${(t.private || privateMode) ? 'p' : 'n'}`}
                 ref={(r) => { webviewRefs.current[t.id] = r; }}
                 source={{ uri: t.url }}
                 onMessage={onWebViewMessage}
@@ -663,7 +704,7 @@ function AppBody() {
                 originWhitelist={['*']}
                 javaScriptEnabled
                 domStorageEnabled
-                incognito={t.private}
+                incognito={t.private || privateMode}
                 allowsBackForwardNavigationGestures
                 pullToRefreshEnabled
                 decelerationRate="normal"
@@ -942,7 +983,7 @@ function AppBody() {
         onClearLikes={clearLikesAction}
         onOpenLogs={() => { setSettingsOpen(false); setLogsOpen(true); }}
         privateMode={privateMode}
-        onChangePrivateMode={setPrivateMode}
+        onChangePrivateMode={changePrivateMode}
       />
       <LogsModal visible={logsOpen} onClose={() => setLogsOpen(false)} />
 
