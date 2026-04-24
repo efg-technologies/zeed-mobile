@@ -150,6 +150,7 @@ function AppBody() {
   const [chatPanelOpen, setChatPanelOpen] = useState(false);
   const [busy, setBusy] = useState(false);
   const [lastStep, setLastStep] = useState<string | null>(null);
+  const [prevStep, setPrevStep] = useState<string | null>(null);
   const [dots, setDots] = useState('');
   const [logsOpen, setLogsOpen] = useState(false);
   const [mode, setMode] = useState<'auto' | 'ask' | 'search'>('auto');
@@ -417,7 +418,7 @@ function AppBody() {
             + (s.action.label ? ` "${s.action.label}"` : '')
             + (s.action.url ? ` ${s.action.url}` : '');
           logger.info(line);
-          setLastStep(line);
+          setLastStep((prev) => { setPrevStep(prev); return line; });
           setMessages((m) => [...m, { role: 'system', content: line }]);
         },
       });
@@ -442,6 +443,7 @@ function AppBody() {
     } finally {
       setBusy(false);
       setLastStep(null);
+      setPrevStep(null);
     }
   }, [busy, observe, act, telemetryDeps]);
 
@@ -450,9 +452,11 @@ function AppBody() {
     if (!goal) return;
     setUrlInput('');
     // Intentionally keep focus + keyboard so user can chain follow-ups.
-    setChatPanelOpen(true);
+    // Auto mode keeps the browser view primary and shows a translucent
+    // step card; Ask mode opens the full chat panel as before.
+    if (mode !== 'auto') setChatPanelOpen(true);
     await runTaskWith(goal);
-  }, [urlInput, runTaskWith]);
+  }, [urlInput, runTaskWith, mode]);
 
   const onUrlSubmit = useCallback(() => {
     const target = shortcutUrl ?? normalizeUrlOrSearch(urlInput);
@@ -700,6 +704,20 @@ function AppBody() {
             })}
           </ScrollView>
         )}
+        {mode === 'auto' && busy && (
+          <Pressable
+            onPress={() => setChatPanelOpen(true)}
+            style={[styles.autoStepCard, { top: insets.top + 8 }]}
+            pointerEvents="box-none"
+          >
+            {prevStep ? (
+              <Text style={styles.autoStepPrev} numberOfLines={1}>{prevStep}</Text>
+            ) : null}
+            <Text style={styles.autoStepNow} numberOfLines={1}>
+              {lastStep ?? 'thinking'}{dots}
+            </Text>
+          </Pressable>
+        )}
         {messages.length > 0 && chatPanelOpen && (
           <View style={styles.chatPanel}>
             <View style={styles.chatPanelHeader}>
@@ -727,7 +745,7 @@ function AppBody() {
             </Text>
           </Pressable>
         )}
-        {busy && (
+        {busy && mode !== 'auto' && (
           <View style={styles.statusBar}>
             <Text style={styles.statusDots}>{dots || '.'}</Text>
             <Text style={styles.statusText} numberOfLines={1}>
@@ -1290,6 +1308,14 @@ const styles = StyleSheet.create({
     paddingVertical: 6, alignItems: 'center',
   },
   chatReopenText: { color: '#888', fontSize: 12 },
+  autoStepCard: {
+    position: 'absolute', left: 12, right: 12, zIndex: 10,
+    paddingVertical: 8, paddingHorizontal: 14, borderRadius: 12,
+    backgroundColor: 'rgba(26,26,31,0.78)',
+    borderWidth: 1, borderColor: 'rgba(91,33,182,0.35)',
+  },
+  autoStepPrev: { color: 'rgba(200,200,210,0.45)', fontSize: 11, marginBottom: 1 },
+  autoStepNow: { color: '#fff', fontSize: 12, fontWeight: '500' },
   chatScroll: { paddingHorizontal: 12 },
   msg: { padding: 8, marginVertical: 4, borderRadius: 8 },
   msgUser: { backgroundColor: '#5B21B6', alignSelf: 'flex-end' },
