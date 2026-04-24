@@ -117,16 +117,18 @@ type Tab = {
   loading: boolean;
   canGoBack: boolean;
   canGoForward: boolean;
+  private: boolean;
 };
 
 let tabSeq = 0;
-const newTab = (url = HOME_URL): Tab => ({
+const newTab = (url = HOME_URL, isPrivate = false): Tab => ({
   id: `t${++tabSeq}`,
   url,
   title: url,
   loading: false,
   canGoBack: false,
   canGoForward: false,
+  private: isPrivate,
 });
 
 export default function App() {
@@ -156,6 +158,7 @@ function AppBody() {
   const [dots, setDots] = useState('');
   const [logsOpen, setLogsOpen] = useState(false);
   const [mode, setMode] = useState<'auto' | 'ask' | 'search'>('auto');
+  const [privateMode, setPrivateMode] = useState(false);
 
   useEffect(() => {
     if (!busy) { setDots(''); return; }
@@ -207,7 +210,13 @@ function AppBody() {
     sendHeartbeatIfNewDay(telemetryDeps).catch(() => { /* ignore */ });
   }, [telemetryDeps]);
 
+  // Active-tab ref mirrors `active` so fire-and-forget telemetry callbacks
+  // can cheaply check privacy without closing over state.
+  const activeRef = useRef<Tab | null>(null);
+  activeRef.current = active;
+
   const telFeature = useCallback((f: FeatureCode) => {
+    if (activeRef.current?.private) return;
     sendFeatureUsed(telemetryDeps, f).catch(() => { /* ignore */ });
   }, [telemetryDeps]);
 
@@ -373,14 +382,15 @@ function AppBody() {
       canGoForward: s.canGoForward,
     });
     if (tabId === activeId && !urlFocused) setUrlInput(s.url);
-    if (!s.loading && s.url && /^https?:/i.test(s.url)) {
+    const tab = tabs.find((t) => t.id === tabId);
+    if (!tab?.private && !s.loading && s.url && /^https?:/i.test(s.url)) {
       setHistory((prev) => {
         const next = recordVisit(prev, s.url, s.title || s.url, Date.now());
         saveHistory(AsyncStorage, next).catch(() => { /* ignore */ });
         return next;
       });
     }
-  }, [activeId, urlFocused, updateTab]);
+  }, [activeId, urlFocused, updateTab, tabs]);
 
   const runTaskWith = useCallback(async (goalRaw: string) => {
     const goal = goalRaw.trim();
@@ -452,11 +462,13 @@ function AppBody() {
         },
       });
       logger.info(`agent end: ok=${result.ok} ${result.error ?? ''}`);
-      sendAgentRun(telemetryDeps, {
-        success: result.ok,
-        stepCount: result.steps.length,
-        endReason: agentEndReason(result),
-      }).catch(() => { /* ignore */ });
+      if (!activeRef.current?.private) {
+        sendAgentRun(telemetryDeps, {
+          success: result.ok,
+          stepCount: result.steps.length,
+          endReason: agentEndReason(result),
+        }).catch(() => { /* ignore */ });
+      }
       setMessages((m) => [...m, {
         role: 'assistant',
         content: result.ok
@@ -466,8 +478,10 @@ function AppBody() {
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e);
       logger.error(`agent threw: ${msg}`);
-      sendAgentRun(telemetryDeps, { success: false, stepCount: 0, endReason: 'error' })
-        .catch(() => { /* ignore */ });
+      if (!activeRef.current?.private) {
+        sendAgentRun(telemetryDeps, { success: false, stepCount: 0, endReason: 'error' })
+          .catch(() => { /* ignore */ });
+      }
       setMessages((m) => [...m, { role: 'assistant', content: `error: ${msg}` }]);
     } finally {
       setBusy(false);
@@ -557,13 +571,13 @@ function AppBody() {
   const reload = useCallback(() => webviewRefs.current[activeId]?.reload(), [activeId]);
 
   const openNewTab = useCallback(() => {
-    const t = newTab();
+    const t = newTab(HOME_URL, privateMode);
     setTabs((ts) => [...ts, t]);
     setActiveId(t.id);
     setUrlInput(t.url);
     setTabListOpen(false);
-    telFeature('tab_new');
-  }, [telFeature]);
+    if (!privateMode) telFeature('tab_new');
+  }, [telFeature, privateMode]);
 
   const openBookmark = useCallback((b: Bookmark) => {
     updateTab(activeId, { url: b.url });
@@ -619,10 +633,13 @@ function AppBody() {
         style={styles.flex1}
       >
         <Pressable
-          style={styles.topBar}
+          style={[styles.topBar, active.private && styles.topBarPrivate]}
           onLongPress={shareActivePage}
           delayLongPress={350}
         >
+          {active.private && (
+            <Text style={styles.topPrivate}>PRIVATE  </Text>
+          )}
           <Text style={styles.topHost} numberOfLines={1}>{hostnameOf(active.url)}</Text>
         </Pressable>
         {active.loading && (
@@ -636,6 +653,7 @@ function AppBody() {
               pointerEvents={t.id === activeId ? 'auto' : 'none'}
             >
               <WebView
+                key={`${t.id}:${t.private ? 'p' : 'n'}`}
                 ref={(r) => { webviewRefs.current[t.id] = r; }}
                 source={{ uri: t.url }}
                 onMessage={onWebViewMessage}
@@ -645,6 +663,7 @@ function AppBody() {
                 originWhitelist={['*']}
                 javaScriptEnabled
                 domStorageEnabled
+                incognito={t.private}
                 allowsBackForwardNavigationGestures
                 pullToRefreshEnabled
                 decelerationRate="normal"
@@ -702,9 +721,14 @@ function AppBody() {
                     )}
                   </View>
                   <View style={styles.tabCardBody}>
-                    <Text style={styles.tabCardTitle} numberOfLines={1}>
-                      {t.title || t.url}
-                    </Text>
+                    <View style={styles.tabCardTitleRow}>
+                      {t.private && (
+                        <Text style={styles.tabCardPrivate}>PRIVATE</Text>
+                      )}
+                      <Text style={styles.tabCardTitle} numberOfLines={1}>
+                        {t.title || t.url}
+                      </Text>
+                    </View>
                     <Text style={styles.tabCardUrl} numberOfLines={1}>{t.url}</Text>
                   </View>
                   <Pressable onPress={() => closeTab(t.id)} style={styles.tabClose} hitSlop={8}>
@@ -875,7 +899,18 @@ function AppBody() {
           <Pressable onPress={() => setTabListOpen((v) => !v)} style={styles.toolTabPill}>
             <Text style={styles.toolTabPillText}>{tabs.length}</Text>
           </Pressable>
-          <Pressable onPress={openNewTab} style={styles.toolBtn}>
+          <Pressable
+            onPress={openNewTab}
+            onLongPress={() => {
+              const t = newTab(HOME_URL, true);
+              setTabs((ts) => [...ts, t]);
+              setActiveId(t.id);
+              setUrlInput(t.url);
+              setTabListOpen(false);
+            }}
+            delayLongPress={300}
+            style={styles.toolBtn}
+          >
             <Text style={styles.toolBtnText}>+</Text>
           </Pressable>
           <Pressable onPress={() => setSettingsOpen(true)} style={styles.toolBtn}>
@@ -894,6 +929,8 @@ function AppBody() {
         onClearBookmarks={clearBookmarksAction}
         onClearLikes={clearLikesAction}
         onOpenLogs={() => { setSettingsOpen(false); setLogsOpen(true); }}
+        privateMode={privateMode}
+        onChangePrivateMode={setPrivateMode}
       />
       <LogsModal visible={logsOpen} onClose={() => setLogsOpen(false)} />
 
@@ -956,6 +993,8 @@ function SettingsModal(props: {
   onClearBookmarks: () => void;
   onClearLikes: () => void;
   onOpenLogs: () => void;
+  privateMode: boolean;
+  onChangePrivateMode: (v: boolean) => void;
 }) {
   const [apiKeyInput, setApiKeyInput] = useState('');
   const [hasStoredKey, setHasStoredKey] = useState(false);
@@ -1030,6 +1069,23 @@ function SettingsModal(props: {
                   <Text style={styles.modalBtnGhostText}>Remove</Text>
                 </Pressable>
               )}
+            </View>
+          </View>
+
+          <Text style={styles.modalSectionHeader}>Private</Text>
+          <View style={styles.modalCard}>
+            <View style={styles.modalRowBetween}>
+              <View style={styles.modalSwitchLabel}>
+                <Text style={styles.modalLabel}>Private mode</Text>
+                <Text style={styles.modalHint}>
+                  New tabs skip history, cookies, and telemetry. Long-press the + button for a one-off private tab.
+                </Text>
+              </View>
+              <Switch
+                value={props.privateMode}
+                onValueChange={props.onChangePrivateMode}
+                trackColor={{ false: '#444', true: '#5B21B6' }}
+              />
             </View>
           </View>
 
@@ -1255,6 +1311,10 @@ const styles = StyleSheet.create({
     backgroundColor: '#0F0F12',
   },
   topHost: { color: '#666', fontSize: 11, letterSpacing: 0.3 },
+  topBarPrivate: { backgroundColor: '#1a0f1f', flexDirection: 'row' },
+  topPrivate: {
+    color: '#b99aff', fontSize: 10, fontWeight: '700', letterSpacing: 1,
+  },
   navBtnDisabled: { color: '#444' },
   navBtnAccent: { color: '#5B21B6' },
   urlInput: {
@@ -1313,7 +1373,13 @@ const styles = StyleSheet.create({
   tabCardFavicon: { width: 28, height: 28 },
   tabCardThumbPlaceholder: { color: '#666', fontSize: 18 },
   tabCardBody: { flex: 1 },
-  tabCardTitle: { color: '#fff', fontSize: 14, fontWeight: '500' },
+  tabCardTitle: { color: '#fff', fontSize: 14, fontWeight: '500', flex: 1 },
+  tabCardTitleRow: { flexDirection: 'row', alignItems: 'center', gap: 6 },
+  tabCardPrivate: {
+    color: '#b99aff', fontSize: 9, fontWeight: '700', letterSpacing: 0.8,
+    paddingHorizontal: 5, paddingVertical: 1, borderRadius: 3,
+    backgroundColor: 'rgba(91,33,182,0.28)',
+  },
   tabCardUrl: { color: '#888', fontSize: 11, marginTop: 2 },
   tabClose: { paddingHorizontal: 6, paddingVertical: 4 },
   tabCloseText: { color: '#888', fontSize: 14 },
