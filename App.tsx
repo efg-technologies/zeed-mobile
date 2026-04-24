@@ -854,20 +854,32 @@ function AppBody() {
           <Text style={styles.modeHint}>{MODE_HINT[mode]}</Text>
         </View>
         <View style={styles.omnibox}>
-          <TextInput
-            style={styles.omniInput}
-            value={urlInput}
-            onChangeText={setUrlInput}
-            onSubmitEditing={onOmniboxPrimary}
-            onFocus={() => setUrlFocused(true)}
-            onBlur={() => setUrlFocused(false)}
-            autoCapitalize="none"
-            autoCorrect={false}
-            placeholder={MODE_PLACEHOLDER[mode]}
-            placeholderTextColor="#666"
-            selectTextOnFocus
-            returnKeyType={mode === 'search' ? 'go' : 'send'}
-          />
+          <View style={styles.omniInputWrap}>
+            <TextInput
+              style={styles.omniInput}
+              value={urlInput}
+              onChangeText={setUrlInput}
+              onSubmitEditing={onOmniboxPrimary}
+              onFocus={() => setUrlFocused(true)}
+              onBlur={() => setUrlFocused(false)}
+              autoCapitalize="none"
+              autoCorrect={false}
+              placeholder={MODE_PLACEHOLDER[mode]}
+              placeholderTextColor="#666"
+              selectTextOnFocus
+              returnKeyType={mode === 'search' ? 'go' : 'send'}
+              clearButtonMode="while-editing"
+            />
+            {Platform.OS !== 'ios' && urlInput.length > 0 && (
+              <Pressable
+                onPress={() => setUrlInput('')}
+                style={styles.omniClear}
+                hitSlop={8}
+              >
+                <Text style={styles.omniClearText}>×</Text>
+              </Pressable>
+            )}
+          </View>
           <Pressable
             onPress={onOmniboxPrimary}
             disabled={busy || !urlInput.trim()}
@@ -1451,9 +1463,17 @@ const styles = StyleSheet.create({
   modeSegText: { color: '#666', fontSize: 11, fontWeight: '600', letterSpacing: 0.3 },
   modeSegTextActive: { color: '#fff' },
   modeHint: { flex: 1, textAlign: 'right', color: '#555', fontSize: 10, paddingRight: 4 },
+  omniInputWrap: { flex: 1, justifyContent: 'center' },
   omniInput: {
-    flex: 1, color: '#fff', backgroundColor: '#0F0F12',
+    color: '#fff', backgroundColor: '#0F0F12',
     borderRadius: 10, paddingHorizontal: 12, paddingVertical: 9, fontSize: 14,
+  },
+  omniClear: {
+    position: 'absolute', right: 8, top: 0, bottom: 0,
+    justifyContent: 'center', alignItems: 'center', width: 28,
+  },
+  omniClearText: {
+    color: '#888', fontSize: 16, lineHeight: 18, fontWeight: '600',
   },
   omniBtn: {
     width: 40, height: 36, borderRadius: 18,
