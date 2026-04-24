@@ -5,8 +5,8 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import {
-  ActivityIndicator, Image, KeyboardAvoidingView, Platform, Pressable, SafeAreaView,
-  ScrollView, StyleSheet, Text, TextInput, View,
+  ActivityIndicator, Alert, Image, KeyboardAvoidingView, Modal, Platform, Pressable,
+  SafeAreaView, ScrollView, StyleSheet, Switch, Text, TextInput, View,
 } from 'react-native';
 import { WebView, type WebViewMessageEvent, type WebViewNavigation } from 'react-native-webview';
 import * as SecureStore from 'expo-secure-store';
@@ -36,9 +36,18 @@ import {
   type Bookmark,
 } from './src/storage/bookmarks.ts';
 import {
-  loadHistory, saveHistory, recordVisit, searchHistory,
+  loadHistory, saveHistory, recordVisit,
   type HistoryEntry,
 } from './src/storage/history.ts';
+import {
+  loadLikes, saveLikes, isLiked, toggleLike,
+  type Like,
+} from './src/storage/likes.ts';
+import {
+  DEFAULT_SETTINGS, loadSettings, saveSettings, type Settings,
+} from './src/storage/settings.ts';
+import { rankSuggestions, type Suggestion } from './src/search/rank.ts';
+import { fetchGoogleSuggestions } from './src/search/google.ts';
 
 const secureStoreBackend: SecureBackend = {
   getItemAsync: (k) => SecureStore.getItemAsync(k),
@@ -83,12 +92,19 @@ export default function App() {
   const [sheetOpen, setSheetOpen] = useState(true);
   const [busy, setBusy] = useState(false);
   const [bookmarks, setBookmarks] = useState<Bookmark[]>([]);
+  const [likes, setLikes] = useState<Like[]>([]);
   const [history, setHistory] = useState<HistoryEntry[]>([]);
+  const [settings, setSettings] = useState<Settings>(DEFAULT_SETTINGS);
   const [urlFocused, setUrlFocused] = useState(false);
+  const [googleSugg, setGoogleSugg] = useState<string[]>([]);
+  const [settingsOpen, setSettingsOpen] = useState(false);
+  const [actionMenuOpen, setActionMenuOpen] = useState(false);
 
   useEffect(() => {
     loadBookmarks(AsyncStorage).then(setBookmarks).catch(() => { /* ignore */ });
+    loadLikes(AsyncStorage).then(setLikes).catch(() => { /* ignore */ });
     loadHistory(AsyncStorage).then(setHistory).catch(() => { /* ignore */ });
+    loadSettings(AsyncStorage).then(setSettings).catch(() => { /* ignore */ });
   }, []);
 
   const toggleCurrentBookmark = useCallback(() => {
@@ -99,7 +115,16 @@ export default function App() {
     });
   }, [active.url, active.title]);
 
+  const toggleCurrentLike = useCallback(() => {
+    setLikes((prev) => {
+      const next = toggleLike(prev, active.url, active.title || active.url, Date.now());
+      saveLikes(AsyncStorage, next).catch(() => { /* ignore */ });
+      return next;
+    });
+  }, [active.url, active.title]);
+
   const activeBookmarked = isBookmarked(bookmarks, active.url);
+  const activeLiked = isLiked(likes, active.url);
 
   const pendingObs = useRef<((o: PageObservation) => void) | null>(null);
 
@@ -107,14 +132,34 @@ export default function App() {
     setTabs((ts) => ts.map((t) => (t.id === id ? { ...t, ...patch } : t)));
   }, []);
 
-  const suggestions = useMemo(
-    () => (urlFocused ? searchHistory(history, urlInput, 6) : []),
-    [urlFocused, history, urlInput],
+  // Debounced Google suggest fetch (opt-in via settings). Aborts in-flight
+  // request on each keystroke so we don't race ourselves.
+  useEffect(() => {
+    if (!urlFocused || !settings.googleSuggestEnabled || !urlInput.trim()) {
+      setGoogleSugg([]);
+      return;
+    }
+    const ctrl = new AbortController();
+    const t = setTimeout(() => {
+      fetchGoogleSuggestions(urlInput, { signal: ctrl.signal })
+        .then(setGoogleSugg)
+        .catch(() => { /* ignore */ });
+    }, 180);
+    return () => { clearTimeout(t); ctrl.abort(); };
+  }, [urlFocused, urlInput, settings.googleSuggestEnabled]);
+
+  const suggestions: Suggestion[] = useMemo(
+    () => (urlFocused
+      ? rankSuggestions({
+        query: urlInput, bookmarks, likes, history, googleSuggestions: googleSugg, limit: 8,
+      })
+      : []),
+    [urlFocused, urlInput, bookmarks, likes, history, googleSugg],
   );
 
-  const pickSuggestion = useCallback((h: HistoryEntry) => {
-    updateTab(activeId, { url: h.url });
-    setUrlInput(h.url);
+  const pickSuggestion = useCallback((s: Suggestion) => {
+    updateTab(activeId, { url: s.url });
+    setUrlInput(s.url);
     setUrlFocused(false);
   }, [activeId, updateTab]);
 
@@ -229,7 +274,29 @@ export default function App() {
     const normalized = normalizeUrlOrSearch(urlInput);
     updateTab(activeId, { url: normalized });
     setUrlInput(normalized);
+    setUrlFocused(false);
   }, [urlInput, activeId, updateTab]);
+
+  const updateSettings = useCallback(async (patch: Partial<Settings>) => {
+    setSettings((prev) => {
+      const next = { ...prev, ...patch };
+      saveSettings(AsyncStorage, next).catch(() => { /* ignore */ });
+      return next;
+    });
+  }, []);
+
+  const clearHistoryAction = useCallback(() => {
+    setHistory([]);
+    saveHistory(AsyncStorage, []).catch(() => { /* ignore */ });
+  }, []);
+  const clearBookmarksAction = useCallback(() => {
+    setBookmarks([]);
+    saveBookmarks(AsyncStorage, []).catch(() => { /* ignore */ });
+  }, []);
+  const clearLikesAction = useCallback(() => {
+    setLikes([]);
+    saveLikes(AsyncStorage, []).catch(() => { /* ignore */ });
+  }, []);
 
   const goBack = useCallback(() => webviewRefs.current[activeId]?.goBack(), [activeId]);
   const goForward = useCallback(() => webviewRefs.current[activeId]?.goForward(), [activeId]);
@@ -329,7 +396,12 @@ export default function App() {
             placeholderTextColor="#666"
             selectTextOnFocus
           />
-          <Pressable onPress={toggleCurrentBookmark} style={styles.navBtn}>
+          <Pressable
+            onPress={toggleCurrentBookmark}
+            onLongPress={() => setActionMenuOpen(true)}
+            delayLongPress={300}
+            style={styles.navBtn}
+          >
             <Text style={[styles.navBtnText, activeBookmarked && styles.navBtnAccent]}>
               {activeBookmarked ? '★' : '☆'}
             </Text>
@@ -340,6 +412,9 @@ export default function App() {
           <Pressable onPress={openNewTab} style={styles.navBtn}>
             <Text style={styles.navBtnText}>＋</Text>
           </Pressable>
+          <Pressable onPress={() => setSettingsOpen(true)} style={styles.navBtn}>
+            <Text style={styles.navBtnText}>⚙</Text>
+          </Pressable>
         </View>
         {active.loading && (
           <View style={styles.progressBar}>
@@ -347,28 +422,36 @@ export default function App() {
           </View>
         )}
         {suggestions.length > 0 && (
-          <View style={styles.suggestions}>
-            {suggestions.map((h) => {
-              const favicon = faviconFor(h.url);
+          <ScrollView
+            style={styles.suggestions}
+            keyboardShouldPersistTaps="handled"
+          >
+            {suggestions.map((s, i) => {
+              const favicon = faviconFor(s.url);
               return (
                 <Pressable
-                  key={`sugg:${h.url}`}
-                  onPress={() => pickSuggestion(h)}
+                  key={`sugg:${s.source}:${s.url}:${i}`}
+                  onPress={() => pickSuggestion(s)}
                   style={styles.suggestionRow}
                 >
-                  {favicon ? (
+                  <View style={styles.sourceBadge}>
+                    <Text style={styles.sourceBadgeText}>{SOURCE_ICON[s.source]}</Text>
+                  </View>
+                  {favicon && s.source !== 'direct' && s.source !== 'google' ? (
                     <Image source={{ uri: favicon }} style={styles.suggestionFavicon} />
                   ) : (
                     <View style={styles.suggestionFaviconFallback} />
                   )}
                   <View style={styles.suggestionBody}>
-                    <Text style={styles.suggestionTitle} numberOfLines={1}>{h.title}</Text>
-                    <Text style={styles.suggestionUrl} numberOfLines={1}>{h.url}</Text>
+                    <Text style={styles.suggestionTitle} numberOfLines={1}>{s.title}</Text>
+                    {s.subtitle ? (
+                      <Text style={styles.suggestionUrl} numberOfLines={1}>{s.subtitle}</Text>
+                    ) : null}
                   </View>
                 </Pressable>
               );
             })}
-          </View>
+          </ScrollView>
         )}
         {tabListOpen && (
           <ScrollView style={styles.tabList} contentContainerStyle={styles.tabListContent}>
@@ -488,7 +571,209 @@ export default function App() {
           )}
         </View>
       </KeyboardAvoidingView>
+
+      <SettingsModal
+        visible={settingsOpen}
+        onClose={() => setSettingsOpen(false)}
+        settings={settings}
+        onChangeSettings={updateSettings}
+        onClearHistory={clearHistoryAction}
+        onClearBookmarks={clearBookmarksAction}
+        onClearLikes={clearLikesAction}
+      />
+
+      <ActionMenuModal
+        visible={actionMenuOpen}
+        onClose={() => setActionMenuOpen(false)}
+        liked={activeLiked}
+        bookmarked={activeBookmarked}
+        onToggleLike={() => { toggleCurrentLike(); setActionMenuOpen(false); }}
+        onToggleBookmark={() => { toggleCurrentBookmark(); setActionMenuOpen(false); }}
+        onSubscribeRss={() => {
+          setActionMenuOpen(false);
+          Alert.alert('RSS subscribe', 'Coming soon. Will detect feeds on the page.');
+        }}
+      />
     </SafeAreaView>
+  );
+}
+
+const SOURCE_ICON: Record<Suggestion['source'], string> = {
+  direct: '→',
+  bookmark: '★',
+  like: '❤',
+  history: '⏱',
+  google: 'G',
+};
+
+function SettingsModal(props: {
+  visible: boolean;
+  onClose: () => void;
+  settings: Settings;
+  onChangeSettings: (patch: Partial<Settings>) => void;
+  onClearHistory: () => void;
+  onClearBookmarks: () => void;
+  onClearLikes: () => void;
+}) {
+  const [apiKeyInput, setApiKeyInput] = useState('');
+  const [hasStoredKey, setHasStoredKey] = useState(false);
+
+  useEffect(() => {
+    if (!props.visible) return;
+    getSecret(KEYS.openrouterApiKey)
+      .then((k) => setHasStoredKey(!!k))
+      .catch(() => setHasStoredKey(false));
+  }, [props.visible]);
+
+  const onSaveKey = async () => {
+    const k = apiKeyInput.trim();
+    if (!k.startsWith('sk-')) {
+      Alert.alert('Invalid key', 'OpenRouter keys start with "sk-".');
+      return;
+    }
+    await setSecret(KEYS.openrouterApiKey, k);
+    setApiKeyInput('');
+    setHasStoredKey(true);
+    Alert.alert('Saved', 'API key stored in Keychain.');
+  };
+
+  const onClearKey = async () => {
+    await setSecret(KEYS.openrouterApiKey, '');
+    setHasStoredKey(false);
+  };
+
+  const confirm = (title: string, message: string, action: () => void) => {
+    Alert.alert(title, message, [
+      { text: 'Cancel', style: 'cancel' },
+      { text: 'Delete', style: 'destructive', onPress: action },
+    ]);
+  };
+
+  return (
+    <Modal
+      visible={props.visible}
+      animationType="slide"
+      presentationStyle="pageSheet"
+      onRequestClose={props.onClose}
+    >
+      <SafeAreaView style={styles.modalRoot}>
+        <View style={styles.modalHeader}>
+          <Text style={styles.modalTitle}>Settings</Text>
+          <Pressable onPress={props.onClose} hitSlop={8}>
+            <Text style={styles.modalClose}>Done</Text>
+          </Pressable>
+        </View>
+        <ScrollView contentContainerStyle={styles.modalBody}>
+          <Text style={styles.modalSectionHeader}>OpenRouter</Text>
+          <View style={styles.modalCard}>
+            <Text style={styles.modalLabel}>
+              {hasStoredKey ? 'API key is stored in Keychain.' : 'No API key set.'}
+            </Text>
+            <TextInput
+              style={styles.modalInput}
+              value={apiKeyInput}
+              onChangeText={setApiKeyInput}
+              placeholder="sk-or-…"
+              placeholderTextColor="#666"
+              autoCapitalize="none"
+              autoCorrect={false}
+              secureTextEntry
+            />
+            <View style={styles.modalRow}>
+              <Pressable onPress={onSaveKey} style={styles.modalBtn}>
+                <Text style={styles.modalBtnText}>Save</Text>
+              </Pressable>
+              {hasStoredKey && (
+                <Pressable onPress={onClearKey} style={styles.modalBtnGhost}>
+                  <Text style={styles.modalBtnGhostText}>Remove</Text>
+                </Pressable>
+              )}
+            </View>
+          </View>
+
+          <Text style={styles.modalSectionHeader}>Search</Text>
+          <View style={styles.modalCard}>
+            <View style={styles.modalRowBetween}>
+              <View style={styles.modalSwitchLabel}>
+                <Text style={styles.modalLabel}>Google search suggestions</Text>
+                <Text style={styles.modalHint}>
+                  Sends each keystroke to Google while typing in the URL bar. Off by default.
+                </Text>
+              </View>
+              <Switch
+                value={props.settings.googleSuggestEnabled}
+                onValueChange={(v) => props.onChangeSettings({ googleSuggestEnabled: v })}
+                trackColor={{ false: '#444', true: '#5B21B6' }}
+              />
+            </View>
+          </View>
+
+          <Text style={styles.modalSectionHeader}>Data</Text>
+          <View style={styles.modalCard}>
+            <Pressable
+              onPress={() => confirm('Clear history', 'Delete all browsing history on this device?', props.onClearHistory)}
+              style={styles.modalBtnRow}
+            >
+              <Text style={styles.modalBtnRowText}>Clear history</Text>
+            </Pressable>
+            <Pressable
+              onPress={() => confirm('Clear bookmarks', 'Delete all bookmarks on this device?', props.onClearBookmarks)}
+              style={styles.modalBtnRow}
+            >
+              <Text style={styles.modalBtnRowText}>Clear bookmarks</Text>
+            </Pressable>
+            <Pressable
+              onPress={() => confirm('Clear likes', 'Delete all likes on this device?', props.onClearLikes)}
+              style={styles.modalBtnRow}
+            >
+              <Text style={styles.modalBtnRowText}>Clear likes</Text>
+            </Pressable>
+          </View>
+
+          <Text style={styles.modalFooter}>
+            Zeed Mobile · All bookmarks / likes / history stay on this device.
+          </Text>
+        </ScrollView>
+      </SafeAreaView>
+    </Modal>
+  );
+}
+
+function ActionMenuModal(props: {
+  visible: boolean;
+  onClose: () => void;
+  liked: boolean;
+  bookmarked: boolean;
+  onToggleLike: () => void;
+  onToggleBookmark: () => void;
+  onSubscribeRss: () => void;
+}) {
+  return (
+    <Modal
+      visible={props.visible}
+      transparent
+      animationType="fade"
+      onRequestClose={props.onClose}
+    >
+      <Pressable style={styles.menuBackdrop} onPress={props.onClose}>
+        <View style={styles.menuCard}>
+          <Pressable onPress={props.onToggleLike} style={styles.menuRow}>
+            <Text style={styles.menuIcon}>{props.liked ? '❤' : '♡'}</Text>
+            <Text style={styles.menuText}>{props.liked ? 'Unlike' : 'Like this page'}</Text>
+          </Pressable>
+          <Pressable onPress={props.onToggleBookmark} style={styles.menuRow}>
+            <Text style={styles.menuIcon}>{props.bookmarked ? '★' : '☆'}</Text>
+            <Text style={styles.menuText}>
+              {props.bookmarked ? 'Remove bookmark' : 'Add bookmark'}
+            </Text>
+          </Pressable>
+          <Pressable onPress={props.onSubscribeRss} style={styles.menuRow}>
+            <Text style={styles.menuIcon}>📡</Text>
+            <Text style={styles.menuText}>Subscribe RSS (coming soon)</Text>
+          </Pressable>
+        </View>
+      </Pressable>
+    </Modal>
   );
 }
 
@@ -514,9 +799,15 @@ const styles = StyleSheet.create({
     height: 2, backgroundColor: '#5B21B6',
   },
   suggestions: {
+    maxHeight: 340,
     backgroundColor: '#1A1A1F',
     borderBottomWidth: 1, borderBottomColor: '#2A2A30',
   },
+  sourceBadge: {
+    width: 22, height: 22, borderRadius: 6,
+    backgroundColor: '#2A2A30', justifyContent: 'center', alignItems: 'center',
+  },
+  sourceBadgeText: { color: '#bbb', fontSize: 12 },
   suggestionRow: {
     flexDirection: 'row', alignItems: 'center', gap: 10,
     paddingHorizontal: 12, paddingVertical: 8,
@@ -587,4 +878,61 @@ const styles = StyleSheet.create({
     paddingHorizontal: 16, justifyContent: 'center',
   },
   sendBtnText: { color: '#fff', fontSize: 18, fontWeight: '600' },
+
+  modalRoot: { flex: 1, backgroundColor: '#0F0F12' },
+  modalHeader: {
+    flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center',
+    paddingHorizontal: 16, paddingVertical: 14,
+    borderBottomWidth: 1, borderBottomColor: '#2A2A30',
+  },
+  modalTitle: { color: '#fff', fontSize: 18, fontWeight: '600' },
+  modalClose: { color: '#5B21B6', fontSize: 15, fontWeight: '500' },
+  modalBody: { padding: 16, gap: 12 },
+  modalSectionHeader: {
+    color: '#888', fontSize: 11, fontWeight: '700',
+    textTransform: 'uppercase', letterSpacing: 0.8,
+    marginTop: 8, marginBottom: 2, paddingHorizontal: 4,
+  },
+  modalCard: {
+    backgroundColor: '#1A1A1F', borderRadius: 12, padding: 14, gap: 10,
+    borderWidth: 1, borderColor: '#2A2A30',
+  },
+  modalLabel: { color: '#fff', fontSize: 14 },
+  modalHint: { color: '#888', fontSize: 12, marginTop: 4 },
+  modalInput: {
+    color: '#fff', backgroundColor: '#0F0F12',
+    borderRadius: 8, paddingHorizontal: 12, paddingVertical: 10, fontSize: 14,
+  },
+  modalRow: { flexDirection: 'row', gap: 8 },
+  modalRowBetween: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', gap: 12 },
+  modalSwitchLabel: { flex: 1 },
+  modalBtn: {
+    flex: 1, backgroundColor: '#5B21B6', borderRadius: 8,
+    paddingVertical: 10, alignItems: 'center',
+  },
+  modalBtnText: { color: '#fff', fontWeight: '600' },
+  modalBtnGhost: {
+    paddingHorizontal: 16, paddingVertical: 10,
+    borderRadius: 8, borderWidth: 1, borderColor: '#2A2A30', alignItems: 'center',
+  },
+  modalBtnGhostText: { color: '#bbb' },
+  modalBtnRow: { paddingVertical: 10 },
+  modalBtnRowText: { color: '#fff', fontSize: 14 },
+  modalFooter: { color: '#555', fontSize: 11, textAlign: 'center', marginTop: 20 },
+
+  menuBackdrop: {
+    flex: 1, backgroundColor: 'rgba(0,0,0,0.5)',
+    justifyContent: 'center', alignItems: 'center', padding: 24,
+  },
+  menuCard: {
+    width: '100%', maxWidth: 360,
+    backgroundColor: '#1A1A1F', borderRadius: 14, padding: 8,
+    borderWidth: 1, borderColor: '#2A2A30',
+  },
+  menuRow: {
+    flexDirection: 'row', alignItems: 'center', gap: 14,
+    paddingHorizontal: 16, paddingVertical: 14,
+  },
+  menuIcon: { fontSize: 20, width: 28, textAlign: 'center' },
+  menuText: { color: '#fff', fontSize: 15 },
 });
