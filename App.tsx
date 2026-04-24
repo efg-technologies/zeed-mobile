@@ -107,7 +107,7 @@ export default function App() {
   const [lastStep, setLastStep] = useState<string | null>(null);
   const [dots, setDots] = useState('');
   const [logsOpen, setLogsOpen] = useState(false);
-  const [mode, setMode] = useState<'auto' | 'ask'>('auto');
+  const [mode, setMode] = useState<'auto' | 'ask' | 'search'>('auto');
 
   useEffect(() => {
     if (!busy) { setDots(''); return; }
@@ -381,18 +381,17 @@ export default function App() {
     Keyboard.dismiss();
   }, [urlInput, shortcutUrl, activeId, updateTab]);
 
-  // Auto mode: URL-like or known shortcut → navigate; else → agent.
-  // Ask mode: always navigate/search (agent triggered only by explicit button).
+  // Auto   : URL-like / shortcut → navigate; else → agent
+  // Ask    : always hand the input to the agent
+  // Search : always navigate (URL) or Google-search (free text)
   const onOmniboxPrimary = useCallback(() => {
     const q = urlInput.trim();
     if (!q) return;
-    if (mode === 'auto') {
-      const urlLike = /^https?:\/\//i.test(q) || /^[^\s]+\.[a-z]{2,}(\/|$)/i.test(q);
-      if (urlLike || shortcutUrl) onUrlSubmit();
-      else runAskFromOmnibox();
-    } else {
-      onUrlSubmit();
-    }
+    if (mode === 'ask') { runAskFromOmnibox(); return; }
+    if (mode === 'search') { onUrlSubmit(); return; }
+    const urlLike = /^https?:\/\//i.test(q) || /^[^\s]+\.[a-z]{2,}(\/|$)/i.test(q);
+    if (urlLike || shortcutUrl) onUrlSubmit();
+    else runAskFromOmnibox();
   }, [mode, urlInput, shortcutUrl, onUrlSubmit, runAskFromOmnibox]);
 
   const updateSettings = useCallback(async (patch: Partial<Settings>) => {
@@ -418,13 +417,20 @@ export default function App() {
 
   const shareActivePage = useCallback(async () => {
     const url = active.url;
-    if (!url || /^about:/i.test(url)) return;
+    if (!url || /^about:/i.test(url)) {
+      logger.warn(`share: invalid url (${url})`);
+      return;
+    }
+    Keyboard.dismiss();
     try {
       logger.info(`share: ${url}`);
-      await Share.share({
-        url,
-        message: active.title ? `${active.title}\n${url}` : url,
-      });
+      const result = await Share.share(
+        Platform.OS === 'ios'
+          ? { url, message: active.title || url }
+          : { message: `${active.title ? active.title + '\n' : ''}${url}` },
+        { dialogTitle: 'Share page' },
+      );
+      logger.debug(`share result: ${result.action}`);
     } catch (e) {
       logger.warn(`share failed: ${e instanceof Error ? e.message : String(e)}`);
     }
@@ -677,13 +683,21 @@ export default function App() {
             })}
           </ScrollView>
         )}
+        <View style={styles.modeBar}>
+          {(['auto', 'ask', 'search'] as const).map((m) => (
+            <Pressable
+              key={m}
+              onPress={() => setMode(m)}
+              style={[styles.modeSeg, mode === m && modeSegActiveStyle(m)]}
+            >
+              <Text style={[styles.modeSegText, mode === m && styles.modeSegTextActive]}>
+                {MODE_LABEL[m]}
+              </Text>
+            </Pressable>
+          ))}
+          <Text style={styles.modeHint}>{MODE_HINT[mode]}</Text>
+        </View>
         <View style={styles.omnibox}>
-          <Pressable
-            onPress={() => setMode((m) => (m === 'auto' ? 'ask' : 'auto'))}
-            style={styles.modePill}
-          >
-            <Text style={styles.modePillText}>{mode === 'auto' ? 'Auto' : 'Ask'}</Text>
-          </Pressable>
           <TextInput
             style={styles.omniInput}
             value={urlInput}
@@ -693,10 +707,10 @@ export default function App() {
             onBlur={() => setUrlFocused(false)}
             autoCapitalize="none"
             autoCorrect={false}
-            placeholder={mode === 'auto' ? 'Ask Zeed or enter URL' : 'Search or enter URL'}
+            placeholder={MODE_PLACEHOLDER[mode]}
             placeholderTextColor="#666"
             selectTextOnFocus
-            returnKeyType={mode === 'auto' ? 'send' : 'go'}
+            returnKeyType={mode === 'search' ? 'go' : 'send'}
           />
           <Pressable
             onPress={onOmniboxPrimary}
@@ -757,7 +771,12 @@ export default function App() {
         bookmarked={activeBookmarked}
         onToggleLike={() => { toggleCurrentLike(); setActionMenuOpen(false); }}
         onToggleBookmark={() => { toggleCurrentBookmark(); setActionMenuOpen(false); }}
-        onShare={() => { setActionMenuOpen(false); shareActivePage(); }}
+        onShare={() => {
+          setActionMenuOpen(false);
+          // Wait for the action-menu modal to finish dismissing, else iOS
+          // can't present the Share sheet over the in-flight animation.
+          setTimeout(() => { shareActivePage(); }, 320);
+        }}
         onSubscribeRss={() => {
           setActionMenuOpen(false);
           Alert.alert('RSS subscribe', 'Coming soon. Will detect feeds on the page.');
@@ -774,6 +793,26 @@ const SOURCE_ICON: Record<Suggestion['source'], string> = {
   history: 'H',
   google: 'G',
 };
+
+type Mode = 'auto' | 'ask' | 'search';
+const MODE_LABEL: Record<Mode, string> = { auto: 'Auto', ask: 'Ask', search: 'Search' };
+const MODE_PLACEHOLDER: Record<Mode, string> = {
+  auto: 'Ask or enter URL',
+  ask: 'Ask Zeed anything',
+  search: 'Search or enter URL',
+};
+const MODE_HINT: Record<Mode, string> = {
+  auto: 'URL → open · text → Zeed',
+  ask: 'always ask Zeed',
+  search: 'always navigate / search',
+};
+function modeSegActiveStyle(m: Mode) {
+  return m === 'ask'
+    ? styles.modeSegActiveAsk
+    : m === 'search'
+      ? styles.modeSegActiveSearch
+      : styles.modeSegActiveAuto;
+}
 
 function SettingsModal(props: {
   visible: boolean;
@@ -943,11 +982,11 @@ function ActionMenuModal(props: {
               {props.bookmarked ? 'Remove bookmark' : 'Add bookmark'}
             </Text>
           </Pressable>
-          <Pressable onPress={props.onShare} style={styles.menuRow}>
-            <Text style={styles.menuText}>Share…</Text>
-          </Pressable>
           <Pressable onPress={props.onSubscribeRss} style={styles.menuRow}>
             <Text style={styles.menuText}>Subscribe RSS (coming soon)</Text>
+          </Pressable>
+          <Pressable onPress={props.onShare} style={styles.menuRow}>
+            <Text style={styles.menuText}>Share…</Text>
           </Pressable>
         </View>
       </Pressable>
@@ -1167,17 +1206,25 @@ const styles = StyleSheet.create({
 
   omnibox: {
     flexDirection: 'row', alignItems: 'center', gap: 6,
-    paddingHorizontal: 8, paddingTop: 8, paddingBottom: 6,
+    paddingHorizontal: 8, paddingTop: 2, paddingBottom: 6,
+    backgroundColor: '#1A1A1F',
+  },
+  modeBar: {
+    flexDirection: 'row', alignItems: 'center', gap: 4,
+    paddingHorizontal: 8, paddingTop: 6, paddingBottom: 2,
     backgroundColor: '#1A1A1F',
     borderTopWidth: 1, borderTopColor: '#2A2A30',
   },
-  modePill: {
-    height: 36, paddingHorizontal: 12, borderRadius: 18,
-    borderWidth: 1, borderColor: '#5B21B6',
-    justifyContent: 'center', alignItems: 'center',
-    backgroundColor: 'rgba(91,33,182,0.15)',
+  modeSeg: {
+    paddingHorizontal: 10, paddingVertical: 4, borderRadius: 10,
+    backgroundColor: 'transparent',
   },
-  modePillText: { color: '#b99aff', fontSize: 12, fontWeight: '700', letterSpacing: 0.5 },
+  modeSegActiveAuto: { backgroundColor: 'rgba(91,33,182,0.28)' },
+  modeSegActiveAsk: { backgroundColor: 'rgba(236,72,153,0.22)' },
+  modeSegActiveSearch: { backgroundColor: 'rgba(255,255,255,0.08)' },
+  modeSegText: { color: '#666', fontSize: 11, fontWeight: '600', letterSpacing: 0.3 },
+  modeSegTextActive: { color: '#fff' },
+  modeHint: { flex: 1, textAlign: 'right', color: '#555', fontSize: 10, paddingRight: 4 },
   omniInput: {
     flex: 1, color: '#fff', backgroundColor: '#0F0F12',
     borderRadius: 10, paddingHorizontal: 12, paddingVertical: 9, fontSize: 14,
