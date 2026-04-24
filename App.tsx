@@ -105,6 +105,7 @@ export default function App() {
   const [lastStep, setLastStep] = useState<string | null>(null);
   const [dots, setDots] = useState('');
   const [logsOpen, setLogsOpen] = useState(false);
+  const [mode, setMode] = useState<'auto' | 'ask'>('auto');
 
   useEffect(() => {
     if (!busy) { setDots(''); return; }
@@ -344,6 +345,20 @@ export default function App() {
     setUrlFocused(false);
   }, [urlInput, activeId, updateTab]);
 
+  // Auto mode: URL-like → navigate; else → agent.
+  // Ask mode: always navigate/search (agent triggered only by explicit button).
+  const onOmniboxPrimary = useCallback(() => {
+    const q = urlInput.trim();
+    if (!q) return;
+    if (mode === 'auto') {
+      const urlLike = /^https?:\/\//i.test(q) || /^[^\s]+\.[a-z]{2,}(\/|$)/i.test(q);
+      if (urlLike) onUrlSubmit();
+      else runAskFromOmnibox();
+    } else {
+      onUrlSubmit();
+    }
+  }, [mode, urlInput, onUrlSubmit, runAskFromOmnibox]);
+
   const updateSettings = useCallback(async (patch: Partial<Settings>) => {
     setSettings((prev) => {
       const next = { ...prev, ...patch };
@@ -430,30 +445,7 @@ export default function App() {
         style={styles.flex1}
       >
         <View style={styles.topBar}>
-          <View style={styles.topBarTitleWrap}>
-            <Text style={styles.topBarTitle} numberOfLines={1}>
-              {active.title && active.title !== active.url ? active.title : hostnameOf(active.url)}
-            </Text>
-          </View>
-          <Pressable
-            onPress={toggleCurrentBookmark}
-            onLongPress={() => setActionMenuOpen(true)}
-            delayLongPress={300}
-            style={styles.navBtn}
-          >
-            <Text style={[styles.navBtnText, activeBookmarked && styles.navBtnAccent]}>
-              {activeBookmarked ? '★' : '☆'}
-            </Text>
-          </Pressable>
-          <Pressable onPress={() => setTabListOpen((v) => !v)} style={styles.tabPill}>
-            <Text style={styles.tabPillText}>{tabs.length}</Text>
-          </Pressable>
-          <Pressable onPress={openNewTab} style={styles.navBtn}>
-            <Text style={styles.navBtnText}>+</Text>
-          </Pressable>
-          <Pressable onPress={() => setSettingsOpen(true)} style={styles.navBtn}>
-            <Text style={styles.navBtnTextSmall}>•••</Text>
-          </Pressable>
+          <Text style={styles.topHost} numberOfLines={1}>{hostnameOf(active.url)}</Text>
         </View>
         {active.loading && (
           <View style={styles.progressBar} />
@@ -610,35 +602,62 @@ export default function App() {
           </ScrollView>
         )}
         <View style={styles.omnibox}>
-          <Pressable onPress={goBack} disabled={!active.canGoBack} style={styles.omniNavBtn}>
-            <Text style={[styles.omniNavText, !active.canGoBack && styles.navBtnDisabled]}>‹</Text>
-          </Pressable>
-          <Pressable onPress={goForward} disabled={!active.canGoForward} style={styles.omniNavBtn}>
-            <Text style={[styles.omniNavText, !active.canGoForward && styles.navBtnDisabled]}>›</Text>
-          </Pressable>
-          <Pressable onPress={reload} style={styles.omniNavBtn}>
-            <Text style={styles.omniNavText}>↻</Text>
+          <Pressable
+            onPress={() => setMode((m) => (m === 'auto' ? 'ask' : 'auto'))}
+            style={styles.modePill}
+          >
+            <Text style={styles.modePillText}>{mode === 'auto' ? 'Auto' : 'Ask'}</Text>
           </Pressable>
           <TextInput
             style={styles.omniInput}
             value={urlInput}
             onChangeText={setUrlInput}
-            onSubmitEditing={onUrlSubmit}
+            onSubmitEditing={onOmniboxPrimary}
             onFocus={() => setUrlFocused(true)}
             onBlur={() => setUrlFocused(false)}
             autoCapitalize="none"
             autoCorrect={false}
-            placeholder="Search, URL, or ask Zeed"
+            placeholder={mode === 'auto' ? 'Ask Zeed or enter URL' : 'Search or enter URL'}
             placeholderTextColor="#666"
             selectTextOnFocus
-            returnKeyType="go"
+            returnKeyType={mode === 'auto' ? 'send' : 'go'}
           />
           <Pressable
-            onPress={runAskFromOmnibox}
+            onPress={onOmniboxPrimary}
             disabled={busy || !urlInput.trim()}
             style={[styles.omniBtn, (busy || !urlInput.trim()) && styles.omniBtnDisabled]}
           >
-            <Text style={styles.omniBtnText}>{busy ? 'Ask' : 'Ask'}</Text>
+            <Text style={styles.omniBtnText}>→</Text>
+          </Pressable>
+        </View>
+        <View style={styles.toolBar}>
+          <Pressable onPress={goBack} disabled={!active.canGoBack} style={styles.toolBtn}>
+            <Text style={[styles.toolBtnText, !active.canGoBack && styles.navBtnDisabled]}>‹</Text>
+          </Pressable>
+          <Pressable onPress={goForward} disabled={!active.canGoForward} style={styles.toolBtn}>
+            <Text style={[styles.toolBtnText, !active.canGoForward && styles.navBtnDisabled]}>›</Text>
+          </Pressable>
+          <Pressable onPress={reload} style={styles.toolBtn}>
+            <Text style={styles.toolBtnText}>↻</Text>
+          </Pressable>
+          <Pressable
+            onPress={toggleCurrentBookmark}
+            onLongPress={() => setActionMenuOpen(true)}
+            delayLongPress={300}
+            style={styles.toolBtn}
+          >
+            <Text style={[styles.toolBtnText, activeBookmarked && styles.navBtnAccent]}>
+              {activeBookmarked ? '★' : '☆'}
+            </Text>
+          </Pressable>
+          <Pressable onPress={() => setTabListOpen((v) => !v)} style={styles.toolTabPill}>
+            <Text style={styles.toolTabPillText}>{tabs.length}</Text>
+          </Pressable>
+          <Pressable onPress={openNewTab} style={styles.toolBtn}>
+            <Text style={styles.toolBtnText}>+</Text>
+          </Pressable>
+          <Pressable onPress={() => setSettingsOpen(true)} style={styles.toolBtn}>
+            <Text style={styles.toolBtnTextSmall}>•••</Text>
           </Pressable>
         </View>
       </KeyboardAvoidingView>
@@ -916,21 +935,13 @@ const styles = StyleSheet.create({
   root: { flex: 1, backgroundColor: '#0F0F12' },
   flex1: { flex: 1 },
   topBar: {
-    flexDirection: 'row', alignItems: 'center', gap: 4,
-    paddingHorizontal: 6, paddingVertical: 6, backgroundColor: '#1A1A1F',
+    alignItems: 'center', justifyContent: 'center',
+    paddingHorizontal: 12, paddingVertical: 4,
+    backgroundColor: '#0F0F12',
   },
-  navBtn: {
-    minWidth: 32, height: 32, justifyContent: 'center', alignItems: 'center',
-    paddingHorizontal: 6,
-  },
-  navBtnText: { color: '#fff', fontSize: 18 },
-  navBtnTextSmall: { color: '#fff', fontSize: 14, letterSpacing: 1 },
+  topHost: { color: '#666', fontSize: 11, letterSpacing: 0.3 },
   navBtnDisabled: { color: '#444' },
   navBtnAccent: { color: '#5B21B6' },
-  topBarTitleWrap: {
-    flex: 1, height: 32, justifyContent: 'center', paddingHorizontal: 8,
-  },
-  topBarTitle: { color: '#ccc', fontSize: 13 },
   urlInput: {
     flex: 1, color: '#fff', backgroundColor: '#0F0F12',
     borderRadius: 8, paddingHorizontal: 10, paddingVertical: 6, fontSize: 13,
@@ -1031,26 +1042,45 @@ const styles = StyleSheet.create({
   statusText: { color: '#bbb', fontSize: 12, flex: 1 },
 
   omnibox: {
-    flexDirection: 'row', alignItems: 'center', gap: 4,
-    paddingHorizontal: 6, paddingVertical: 8,
+    flexDirection: 'row', alignItems: 'center', gap: 6,
+    paddingHorizontal: 8, paddingTop: 8, paddingBottom: 6,
     backgroundColor: '#1A1A1F',
     borderTopWidth: 1, borderTopColor: '#2A2A30',
   },
-  omniNavBtn: {
-    minWidth: 28, height: 36, justifyContent: 'center', alignItems: 'center',
-    paddingHorizontal: 4,
+  modePill: {
+    height: 36, paddingHorizontal: 12, borderRadius: 18,
+    borderWidth: 1, borderColor: '#5B21B6',
+    justifyContent: 'center', alignItems: 'center',
+    backgroundColor: 'rgba(91,33,182,0.15)',
   },
-  omniNavText: { color: '#ddd', fontSize: 18 },
+  modePillText: { color: '#b99aff', fontSize: 12, fontWeight: '700', letterSpacing: 0.5 },
   omniInput: {
     flex: 1, color: '#fff', backgroundColor: '#0F0F12',
     borderRadius: 10, paddingHorizontal: 12, paddingVertical: 9, fontSize: 14,
   },
   omniBtn: {
-    paddingHorizontal: 14, paddingVertical: 9, borderRadius: 8,
+    width: 40, height: 36, borderRadius: 18,
     backgroundColor: '#5B21B6',
+    justifyContent: 'center', alignItems: 'center',
   },
   omniBtnDisabled: { backgroundColor: '#2A2A30' },
-  omniBtnText: { color: '#fff', fontSize: 13, fontWeight: '600' },
+  omniBtnText: { color: '#fff', fontSize: 18, fontWeight: '700' },
+
+  toolBar: {
+    flexDirection: 'row', alignItems: 'center',
+    paddingHorizontal: 4, paddingTop: 2, paddingBottom: 6,
+    backgroundColor: '#1A1A1F',
+  },
+  toolBtn: {
+    flex: 1, height: 36, justifyContent: 'center', alignItems: 'center',
+  },
+  toolBtnText: { color: '#ddd', fontSize: 18 },
+  toolBtnTextSmall: { color: '#ddd', fontSize: 14, letterSpacing: 1 },
+  toolTabPill: {
+    flex: 1, height: 28, marginHorizontal: 2, borderRadius: 6,
+    backgroundColor: '#2A2A30', justifyContent: 'center', alignItems: 'center',
+  },
+  toolTabPillText: { color: '#fff', fontSize: 13, fontWeight: '600' },
 
   modalRoot: { flex: 1, backgroundColor: '#0F0F12' },
   modalHeader: {
