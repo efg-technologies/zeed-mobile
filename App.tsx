@@ -449,7 +449,7 @@ function AppBody() {
                 logger.warn(`chat error: ${r.error}`);
                 return { response: r.response, error: r.error };
               }
-              logger.debug(`chat ← ${r.response.slice(0, 80)}`);
+              logger.debug(`chat ← ${r.response.slice(0, 200)}`);
               return { response: r.response, error: null };
             } catch (e) {
               const msg = e instanceof Error ? e.message : String(e);
@@ -1280,6 +1280,16 @@ function LogsModal(props: { visible: boolean; onClose: () => void }) {
     return subscribeLogs(() => setTick((x) => x + 1));
   }, [props.visible]);
   const entries: LogEntry[] = props.visible ? getLogs() : [];
+
+  const shareLogs = async () => {
+    const text = entries
+      .map((e) => `${formatTime(e.t)} ${e.level.toUpperCase().padEnd(5)} ${e.msg}`)
+      .join('\n');
+    try {
+      await Share.share({ message: text || '(no logs)' });
+    } catch { /* ignore */ }
+  };
+
   return (
     <Modal
       visible={props.visible}
@@ -1293,9 +1303,14 @@ function LogsModal(props: { visible: boolean; onClose: () => void }) {
             <Text style={styles.modalCloseGhost}>Clear</Text>
           </Pressable>
           <Text style={styles.modalTitle}>Logs</Text>
-          <Pressable onPress={props.onClose} hitSlop={8}>
-            <Text style={styles.modalClose}>Done</Text>
-          </Pressable>
+          <View style={styles.modalHeaderRight}>
+            <Pressable onPress={shareLogs} hitSlop={8}>
+              <Text style={styles.modalCloseGhost}>Share</Text>
+            </Pressable>
+            <Pressable onPress={props.onClose} hitSlop={8}>
+              <Text style={styles.modalClose}>Done</Text>
+            </Pressable>
+          </View>
         </View>
         <ScrollView contentContainerStyle={styles.logBody}>
           {entries.length === 0 ? (
@@ -1658,6 +1673,7 @@ const styles = StyleSheet.create({
   modalTitle: { color: '#fff', fontSize: 18, fontWeight: '600' },
   modalClose: { color: '#5B21B6', fontSize: 15, fontWeight: '500' },
   modalCloseGhost: { color: '#888', fontSize: 15 },
+  modalHeaderRight: { flexDirection: 'row', gap: 16 },
 
   logBody: { padding: 16, gap: 2 },
   logEmpty: { color: '#666', textAlign: 'center', marginTop: 40 },
