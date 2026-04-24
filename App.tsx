@@ -698,7 +698,18 @@ function AppBody() {
     }
   }, [activeId, active.canGoBack, active.hasStartPage, active.url, updateTab]);
   const goForward = useCallback(() => webviewRefs.current[activeId]?.goForward(), [activeId]);
-  const reload = useCallback(() => webviewRefs.current[activeId]?.reload(), [activeId]);
+  const [startPageNonce, setStartPageNonce] = useState(0);
+  const reload = useCallback(() => {
+    // On NEW_TAB_URL the WebView has an HTML source with a nil baseURL,
+    // so wv.reload() ends up requesting about:blank and shows the
+    // WebView error page. Instead, bump a nonce to re-mount the start
+    // page cleanly.
+    if (active.url === NEW_TAB_URL) {
+      setStartPageNonce((n) => n + 1);
+      return;
+    }
+    webviewRefs.current[activeId]?.reload();
+  }, [activeId, active.url]);
 
   const openNewTab = useCallback(() => {
     const groupId = defaultGroupFor(activeProfileId).id;
@@ -795,7 +806,7 @@ function AppBody() {
               pointerEvents={t.id === activeId ? 'auto' : 'none'}
             >
               <WebView
-                key={`${t.id}:${isProfilePrivate(t.profileId) ? 'p' : 'n'}:${t.url === NEW_TAB_URL ? 'home' : 'web'}`}
+                key={`${t.id}:${isProfilePrivate(t.profileId) ? 'p' : 'n'}:${t.url === NEW_TAB_URL ? `home${startPageNonce}` : 'web'}`}
                 ref={(r) => { webviewRefs.current[t.id] = r; }}
                 source={t.url === NEW_TAB_URL
                   ? { html: startPageHtml }
