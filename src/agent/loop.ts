@@ -65,7 +65,15 @@ Available tools:
 Rules:
 - Reply with ONLY a single JSON object, no prose.
 - Prefer click_by_label over click_by_selector.
-- Emit needs_autopilot only after 2+ failed local attempts at the same sub-goal.`;
+- Emit needs_autopilot only after 2+ failed local attempts at the same sub-goal.
+- The "summary" field of finish is shown to the user and may use GitHub-flavored
+  Markdown (headings, lists, **bold**, links, code). If a concept map / entity
+  relationships are useful, include a fenced block:
+      \`\`\`zeed-graph
+      {"nodes":[{"id":"a","label":"X"}],"edges":[{"from":"a","to":"b","label":"rel"}]}
+      \`\`\`
+  The UI renders the graph inline alongside the rest of the Markdown.
+  Use the graph only when relationships are the point — don't decorate.`;
 
 const MAX_STEPS = 20;
 const MAX_CONSECUTIVE_FAILURES = 3;

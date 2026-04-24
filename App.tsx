@@ -2,7 +2,7 @@
 // Multi-tab WebView + bottom-sheet chat. Agent path A (local JS injection)
 // is the default; path B (cloud autopilot) is opt-in via settings.
 
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import * as Linking from 'expo-linking';
 import {
@@ -99,6 +99,10 @@ import {
   type TelemetryDeps,
 } from './src/telemetry/client.ts';
 import type { EndReason, FeatureCode } from './src/telemetry/allowlist.ts';
+import Markdown from 'react-native-markdown-display';
+import Svg, { Circle, Line, Text as SvgText } from 'react-native-svg';
+import { parseAssistantMessage, type Segment, type GraphData } from './src/chat/render.ts';
+import { layoutCircular } from './src/chat/graph.ts';
 
 const secureStoreBackend: SecureBackend = {
   getItemAsync: (k) => SecureStore.getItemAsync(k),
@@ -661,11 +665,21 @@ function AppBody() {
     delete webviewRefs.current[id];
   }, [activeId, telFeature]);
 
-  const chatRendered = useMemo(() => messages.map((m, i) => (
-    <View key={i} style={[styles.msg, m.role === 'user' ? styles.msgUser : m.role === 'system' ? styles.msgSystem : styles.msgBot]}>
-      <Text style={styles.msgText}>{m.content}</Text>
-    </View>
-  )), [messages]);
+  const chatRendered = useMemo(() => messages.map((m, i) => {
+    if (m.role === 'assistant') {
+      const segments = parseAssistantMessage(m.content);
+      return (
+        <View key={i} style={[styles.msg, styles.msgBot]}>
+          {segments.map((seg, j) => renderSegment(seg, `${i}:${j}`))}
+        </View>
+      );
+    }
+    return (
+      <View key={i} style={[styles.msg, m.role === 'user' ? styles.msgUser : styles.msgSystem]}>
+        <Text style={styles.msgText}>{m.content}</Text>
+      </View>
+    );
+  }), [messages]);
 
   return (
     <View style={[styles.root, { paddingTop: insets.top }]}>
@@ -1341,6 +1355,90 @@ function WebViewError(props: {
   );
 }
 
+const markdownStyles = {
+  body: { color: '#fff', fontSize: 14, lineHeight: 20 },
+  heading1: { color: '#fff', fontSize: 18, fontWeight: '700' as const, marginTop: 4, marginBottom: 4 },
+  heading2: { color: '#fff', fontSize: 16, fontWeight: '700' as const, marginTop: 4, marginBottom: 2 },
+  heading3: { color: '#fff', fontSize: 14, fontWeight: '700' as const, marginTop: 2, marginBottom: 2 },
+  paragraph: { color: '#fff', fontSize: 14, marginTop: 2, marginBottom: 2 },
+  list_item: { color: '#fff', fontSize: 14 },
+  bullet_list: { marginVertical: 2 },
+  ordered_list: { marginVertical: 2 },
+  link: { color: '#b99aff' },
+  code_inline: {
+    color: '#ddd', backgroundColor: 'rgba(91,33,182,0.18)',
+    fontFamily: Platform.OS === 'ios' ? 'Menlo' : 'monospace', fontSize: 12,
+    paddingHorizontal: 4, borderRadius: 3,
+  },
+  code_block: {
+    color: '#ddd', backgroundColor: '#0F0F12',
+    fontFamily: Platform.OS === 'ios' ? 'Menlo' : 'monospace', fontSize: 12,
+    padding: 8, borderRadius: 6, marginVertical: 4,
+  },
+  fence: {
+    color: '#ddd', backgroundColor: '#0F0F12',
+    fontFamily: Platform.OS === 'ios' ? 'Menlo' : 'monospace', fontSize: 12,
+    padding: 8, borderRadius: 6, marginVertical: 4,
+  },
+  blockquote: {
+    color: '#bbb', backgroundColor: 'rgba(255,255,255,0.05)',
+    borderLeftColor: '#5B21B6', borderLeftWidth: 3,
+    paddingLeft: 8, paddingVertical: 4, marginVertical: 4,
+  },
+  strong: { color: '#fff', fontWeight: '700' as const },
+  em: { color: '#fff', fontStyle: 'italic' as const },
+};
+
+function renderSegment(seg: Segment, key: string): React.ReactElement {
+  if (seg.type === 'markdown') {
+    return (
+      <View key={key}>
+        <Markdown style={markdownStyles}>{seg.text}</Markdown>
+      </View>
+    );
+  }
+  if (seg.type === 'graph_error') {
+    return (
+      <View key={key} style={styles.graphError}>
+        <Text style={styles.graphErrorText}>graph error: {seg.error}</Text>
+      </View>
+    );
+  }
+  return <GraphView key={key} data={seg.data} />;
+}
+
+function GraphView({ data }: { data: GraphData }) {
+  const size = 260;
+  const layout = useMemo(
+    () => layoutCircular(data, { width: size, height: size, padding: 36 }),
+    [data],
+  );
+  return (
+    <View style={styles.graphWrap}>
+      <Svg width={size} height={size}>
+        {layout.edges.map((e, i) => (
+          <Line
+            key={`e${i}`}
+            x1={e.x1} y1={e.y1} x2={e.x2} y2={e.y2}
+            stroke="rgba(91,33,182,0.6)" strokeWidth={1.5}
+          />
+        ))}
+        {layout.nodes.map((n) => (
+          <React.Fragment key={`n-${n.id}`}>
+            <Circle cx={n.x} cy={n.y} r={14} fill="#5B21B6" />
+            <SvgText
+              x={n.x} y={n.y + 28}
+              fill="#ddd" fontSize={10} textAnchor="middle"
+            >
+              {n.label.slice(0, 16)}
+            </SvgText>
+          </React.Fragment>
+        ))}
+      </Svg>
+    </View>
+  );
+}
+
 function formatTime(t: number): string {
   const d = new Date(t);
   const pad = (n: number) => n.toString().padStart(2, '0');
@@ -1465,7 +1563,13 @@ const styles = StyleSheet.create({
   autoStepPrev: { color: 'rgba(200,200,210,0.45)', fontSize: 11, marginBottom: 1 },
   autoStepNow: { color: '#fff', fontSize: 12, fontWeight: '500' },
   chatScroll: { paddingHorizontal: 12 },
-  msg: { padding: 8, marginVertical: 4, borderRadius: 8 },
+  msg: { padding: 8, marginVertical: 4, borderRadius: 8, maxWidth: '95%' },
+  graphWrap: { alignItems: 'center', marginVertical: 6 },
+  graphError: {
+    backgroundColor: 'rgba(255,107,107,0.08)', borderRadius: 6,
+    paddingHorizontal: 8, paddingVertical: 4, marginVertical: 4,
+  },
+  graphErrorText: { color: '#ff6b6b', fontSize: 11 },
   msgUser: { backgroundColor: '#5B21B6', alignSelf: 'flex-end' },
   msgBot: { backgroundColor: '#2A2A30', alignSelf: 'flex-start' },
   msgSystem: { backgroundColor: 'transparent', alignSelf: 'center' },
