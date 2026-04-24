@@ -7,8 +7,12 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import * as Linking from 'expo-linking';
 import {
   Alert, Image, Keyboard, KeyboardAvoidingView, Modal, Platform, Pressable,
-  SafeAreaView, ScrollView, Share, StyleSheet, Switch, Text, TextInput, View,
+  ScrollView, Share, StyleSheet, Switch, Text, TextInput, View,
 } from 'react-native';
+import {
+  SafeAreaProvider, SafeAreaView, useSafeAreaInsets,
+} from 'react-native-safe-area-context';
+import { StatusBar } from 'expo-status-bar';
 import { WebView, type WebViewMessageEvent, type WebViewNavigation } from 'react-native-webview';
 import * as SecureStore from 'expo-secure-store';
 
@@ -93,6 +97,16 @@ const newTab = (url = HOME_URL): Tab => ({
 });
 
 export default function App() {
+  return (
+    <SafeAreaProvider>
+      <StatusBar style="light" />
+      <AppBody />
+    </SafeAreaProvider>
+  );
+}
+
+function AppBody() {
+  const insets = useSafeAreaInsets();
   const webviewRefs = useRef<Record<string, WebView | null>>({});
   const initialTab = useMemo(() => newTab(), []);
   const [tabs, setTabs] = useState<Tab[]>(() => [initialTab]);
@@ -495,7 +509,7 @@ export default function App() {
   )), [messages]);
 
   return (
-    <SafeAreaView style={styles.root}>
+    <View style={[styles.root, { paddingTop: insets.top }]}>
       <KeyboardAvoidingView
         behavior={Platform.OS === 'ios' ? 'padding' : undefined}
         style={styles.flex1}
@@ -683,6 +697,7 @@ export default function App() {
             })}
           </ScrollView>
         )}
+        <View style={[styles.bottomStack, { paddingBottom: insets.bottom }]}>
         <View style={styles.modeBar}>
           {(['auto', 'ask', 'search'] as const).map((m) => (
             <Pressable
@@ -750,6 +765,7 @@ export default function App() {
             <Text style={styles.toolBtnTextSmall}>•••</Text>
           </Pressable>
         </View>
+        </View>
       </KeyboardAvoidingView>
 
       <SettingsModal
@@ -782,7 +798,7 @@ export default function App() {
           Alert.alert('RSS subscribe', 'Coming soon. Will detect feeds on the page.');
         }}
       />
-    </SafeAreaView>
+    </View>
   );
 }
 
@@ -1097,6 +1113,7 @@ function logLevelStyle(level: LogEntry['level']) {
 const styles = StyleSheet.create({
   root: { flex: 1, backgroundColor: '#0F0F12' },
   flex1: { flex: 1 },
+  bottomStack: { backgroundColor: '#1A1A1F' },
   topBar: {
     alignItems: 'center', justifyContent: 'center',
     paddingHorizontal: 12, paddingVertical: 4,
