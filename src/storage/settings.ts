@@ -3,6 +3,7 @@
 
 export interface Settings {
   googleSuggestEnabled: boolean;
+  telemetryAggregateEnabled: boolean;
 }
 
 export interface KvBackend {
@@ -14,6 +15,7 @@ const KEY = 'zeed.settings.v1';
 
 export const DEFAULT_SETTINGS: Settings = {
   googleSuggestEnabled: false,
+  telemetryAggregateEnabled: true,
 };
 
 export async function loadSettings(kv: KvBackend): Promise<Settings> {
@@ -37,6 +39,9 @@ export function normalize(input: unknown): Settings {
   const v = input as Record<string, unknown>;
   if (typeof v.googleSuggestEnabled === 'boolean') {
     base.googleSuggestEnabled = v.googleSuggestEnabled;
+  }
+  if (typeof v.telemetryAggregateEnabled === 'boolean') {
+    base.telemetryAggregateEnabled = v.telemetryAggregateEnabled;
   }
   return base;
 }

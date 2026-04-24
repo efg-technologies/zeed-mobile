@@ -38,6 +38,31 @@ function hostnameOf(u: string): string {
     return u;
   }
 }
+
+// 16-byte hex id using Math.random. Anonymous aggregate id; collision risk is
+// cosmetic in the scale we care about (< 1M installs).
+function randomHex(bytes: number): string {
+  let out = '';
+  for (let i = 0; i < bytes; i++) {
+    out += Math.floor(Math.random() * 256).toString(16).padStart(2, '0');
+  }
+  return out;
+}
+
+const APP_VERSION = `mobile-${Platform.OS}/0.1.0`;
+
+function agentEndReason(r: { ok: boolean; error?: string; suggestAutopilot?: boolean }): EndReason {
+  if (r.ok) return 'finish';
+  const e = (r.error ?? '').toLowerCase();
+  if (r.suggestAutopilot && e.includes('max step')) return 'max_steps';
+  if (r.suggestAutopilot && e.includes('failure')) return 'failure_cap';
+  if (r.suggestAutopilot) return 'needs_autopilot';
+  if (e.includes('parse')) return 'parse_error';
+  if (e.includes('reason')) return 'reason_error';
+  if (e.includes('observe')) return 'observe_error';
+  if (e.includes('abort')) return 'aborted';
+  return 'error';
+}
 import { chat } from './src/llm/openrouter.ts';
 import { runAgent, type AgentAction, type PageObservation } from './src/agent/loop.ts';
 import {
@@ -66,6 +91,12 @@ import {
   logger, getLogs, clearLogs, subscribe as subscribeLogs, withTimeout,
   type LogEntry,
 } from './src/debug/log.ts';
+import {
+  sendAgentRun, sendFeatureUsed, sendHeartbeatIfNewDay,
+  sendInstallOnce, sendSessionStart,
+  type TelemetryDeps,
+} from './src/telemetry/client.ts';
+import type { EndReason, FeatureCode } from './src/telemetry/allowlist.ts';
 
 const secureStoreBackend: SecureBackend = {
   getItemAsync: (k) => SecureStore.getItemAsync(k),
@@ -150,6 +181,31 @@ function AppBody() {
     loadSettings(AsyncStorage).then(setSettings).catch(() => { /* ignore */ });
   }, []);
 
+  // Telemetry: keep a live ref to settings so the tierAEnabled closure always
+  // reflects the current toggle even after fire-and-forget callers captured it.
+  const settingsRef = useRef(settings);
+  useEffect(() => { settingsRef.current = settings; }, [settings]);
+  const telemetryDeps: TelemetryDeps = useMemo(() => ({
+    kv: AsyncStorage,
+    fetch,
+    now: Date.now,
+    randomHex,
+    version: APP_VERSION,
+    os: Platform.OS === 'android' ? 'android' : 'ios',
+    tierAEnabled: () => settingsRef.current.telemetryAggregateEnabled,
+    logger: { debug: (m) => logger.debug(m), warn: (m) => logger.warn(m) },
+  }), []);
+
+  useEffect(() => {
+    sendInstallOnce(telemetryDeps).catch(() => { /* ignore */ });
+    sendSessionStart(telemetryDeps).catch(() => { /* ignore */ });
+    sendHeartbeatIfNewDay(telemetryDeps).catch(() => { /* ignore */ });
+  }, [telemetryDeps]);
+
+  const telFeature = useCallback((f: FeatureCode) => {
+    sendFeatureUsed(telemetryDeps, f).catch(() => { /* ignore */ });
+  }, [telemetryDeps]);
+
   // Default-browser handoff: when the OS hands us an http/https URL (via
   // "Open in Zeed" / default-browser routing), open it in a fresh tab.
   useEffect(() => {
@@ -169,19 +225,23 @@ function AppBody() {
 
   const toggleCurrentBookmark = useCallback(() => {
     setBookmarks((prev) => {
+      const had = prev.some((b) => b.url === active.url);
       const next = toggleBookmark(prev, active.url, active.title || active.url, Date.now());
       saveBookmarks(AsyncStorage, next).catch(() => { /* ignore */ });
+      telFeature(had ? 'bookmark_remove' : 'bookmark_add');
       return next;
     });
-  }, [active.url, active.title]);
+  }, [active.url, active.title, telFeature]);
 
   const toggleCurrentLike = useCallback(() => {
     setLikes((prev) => {
+      const had = prev.some((l) => l.url === active.url);
       const next = toggleLike(prev, active.url, active.title || active.url, Date.now());
       saveLikes(AsyncStorage, next).catch(() => { /* ignore */ });
+      telFeature(had ? 'like_remove' : 'like_add');
       return next;
     });
-  }, [active.url, active.title]);
+  }, [active.url, active.title, telFeature]);
 
   const activeBookmarked = isBookmarked(bookmarks, active.url);
   const activeLiked = isLiked(likes, active.url);
@@ -362,6 +422,11 @@ function AppBody() {
         },
       });
       logger.info(`agent end: ok=${result.ok} ${result.error ?? ''}`);
+      sendAgentRun(telemetryDeps, {
+        success: result.ok,
+        stepCount: result.steps.length,
+        endReason: agentEndReason(result),
+      }).catch(() => { /* ignore */ });
       setMessages((m) => [...m, {
         role: 'assistant',
         content: result.ok
@@ -371,12 +436,14 @@ function AppBody() {
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e);
       logger.error(`agent threw: ${msg}`);
+      sendAgentRun(telemetryDeps, { success: false, stepCount: 0, endReason: 'error' })
+        .catch(() => { /* ignore */ });
       setMessages((m) => [...m, { role: 'assistant', content: `error: ${msg}` }]);
     } finally {
       setBusy(false);
       setLastStep(null);
     }
-  }, [busy, observe, act]);
+  }, [busy, observe, act, telemetryDeps]);
 
   const runAskFromOmnibox = useCallback(async () => {
     const goal = urlInput.trim();
@@ -436,6 +503,7 @@ function AppBody() {
       return;
     }
     Keyboard.dismiss();
+    telFeature('share');
     try {
       logger.info(`share: ${url}`);
       const result = await Share.share(
@@ -448,7 +516,7 @@ function AppBody() {
     } catch (e) {
       logger.warn(`share failed: ${e instanceof Error ? e.message : String(e)}`);
     }
-  }, [active.url, active.title]);
+  }, [active.url, active.title, telFeature]);
 
   const goBack = useCallback(() => webviewRefs.current[activeId]?.goBack(), [activeId]);
   const goForward = useCallback(() => webviewRefs.current[activeId]?.goForward(), [activeId]);
@@ -460,7 +528,8 @@ function AppBody() {
     setActiveId(t.id);
     setUrlInput(t.url);
     setTabListOpen(false);
-  }, []);
+    telFeature('tab_new');
+  }, [telFeature]);
 
   const openBookmark = useCallback((b: Bookmark) => {
     updateTab(activeId, { url: b.url });
@@ -484,6 +553,7 @@ function AppBody() {
   }, [tabs]);
 
   const closeTab = useCallback((id: string) => {
+    telFeature('tab_close');
     setTabs((ts) => {
       const next = ts.filter((t) => t.id !== id);
       if (next.length === 0) {
@@ -500,7 +570,7 @@ function AppBody() {
       return next;
     });
     delete webviewRefs.current[id];
-  }, [activeId]);
+  }, [activeId, telFeature]);
 
   const chatRendered = useMemo(() => messages.map((m, i) => (
     <View key={i} style={[styles.msg, m.role === 'user' ? styles.msgUser : m.role === 'system' ? styles.msgSystem : styles.msgBot]}>
@@ -702,7 +772,7 @@ function AppBody() {
           {(['auto', 'ask', 'search'] as const).map((m) => (
             <Pressable
               key={m}
-              onPress={() => setMode(m)}
+              onPress={() => { setMode(m); telFeature(`mode_${m}` as FeatureCode); }}
               style={[styles.modeSeg, mode === m && modeSegActiveStyle(m)]}
             >
               <Text style={[styles.modeSegText, mode === m && styles.modeSegTextActive]}>
@@ -928,6 +998,24 @@ function SettingsModal(props: {
               <Switch
                 value={props.settings.googleSuggestEnabled}
                 onValueChange={(v) => props.onChangeSettings({ googleSuggestEnabled: v })}
+                trackColor={{ false: '#444', true: '#5B21B6' }}
+              />
+            </View>
+          </View>
+
+          <Text style={styles.modalSectionHeader}>Telemetry</Text>
+          <View style={styles.modalCard}>
+            <View style={styles.modalRowBetween}>
+              <View style={styles.modalSwitchLabel}>
+                <Text style={styles.modalLabel}>Anonymous aggregate telemetry</Text>
+                <Text style={styles.modalHint}>
+                  install · session · agent success counts. No URLs, queries, or
+                  page content. Helps track whether Zeed is getting better.
+                </Text>
+              </View>
+              <Switch
+                value={props.settings.telemetryAggregateEnabled}
+                onValueChange={(v) => props.onChangeSettings({ telemetryAggregateEnabled: v })}
                 trackColor={{ false: '#444', true: '#5B21B6' }}
               />
             </View>

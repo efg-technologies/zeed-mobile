@@ -32,10 +32,16 @@ test('normalize: non-boolean googleSuggestEnabled ignored', () => {
 
 test('save → load roundtrip', async () => {
   const kv = memKv();
-  await saveSettings(kv, { googleSuggestEnabled: true });
-  assert.deepEqual(await loadSettings(kv), { googleSuggestEnabled: true });
+  await saveSettings(kv, { googleSuggestEnabled: true, telemetryAggregateEnabled: false });
+  assert.deepEqual(await loadSettings(kv), {
+    googleSuggestEnabled: true, telemetryAggregateEnabled: false,
+  });
 });
 
 test('default googleSuggestEnabled is false (opt-in)', () => {
   assert.equal(DEFAULT_SETTINGS.googleSuggestEnabled, false);
+});
+
+test('default telemetryAggregateEnabled is true (opt-out, matches browser)', () => {
+  assert.equal(DEFAULT_SETTINGS.telemetryAggregateEnabled, true);
 });

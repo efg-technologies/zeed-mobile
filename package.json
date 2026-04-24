@@ -10,6 +10,7 @@
     "lint": "expo lint",
     "test": "node --experimental-strip-types --test 'src/**/*.test.ts'",
     "test:watch": "node --experimental-strip-types --test --watch 'src/**/*.test.ts'",
+    "coverage": "c8 --reporter=text --reporter=json-summary --include='src/**/*.ts' --exclude='src/**/*.test.ts' node --experimental-strip-types --test 'src/**/*.test.ts'",
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
@@ -28,6 +29,7 @@
   "devDependencies": {
     "@expo/config-plugins": "~54.0.4",
     "@types/react": "~19.1.0",
+    "c8": "^11.0.0",
     "typescript": "~5.9.2"
   },
   "engines": {
