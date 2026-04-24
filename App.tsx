@@ -406,14 +406,23 @@ function AppBody() {
   }, [active.url]);
 
   const onNavStateChange = useCallback((tabId: string, s: WebViewNavigation) => {
+    // A tab that was opened on the local Start Page renders HTML via
+    // source={html}; WKWebView fires NavigationStateChange with url like
+    // 'about:blank' which, if committed, would switch the tab out of
+    // Start-Page mode back to a literal about:blank (renders white).
+    // Only adopt the reported URL when it's a real http(s) navigation.
+    const current = tabs.find((t) => t.id === tabId);
+    const acceptUrl = /^https?:\/\//i.test(s.url);
+    const nextUrl = acceptUrl ? s.url
+      : (current?.url === NEW_TAB_URL ? NEW_TAB_URL : s.url);
     updateTab(tabId, {
-      url: s.url,
-      title: s.title || s.url,
+      url: nextUrl,
+      title: s.title || nextUrl,
       loading: s.loading,
       canGoBack: s.canGoBack,
       canGoForward: s.canGoForward,
     });
-    if (tabId === activeId && !urlFocused) setUrlInput(s.url);
+    if (tabId === activeId && !urlFocused) setUrlInput(nextUrl);
     const tab = tabs.find((t) => t.id === tabId);
     const owningProfile = profiles.find((p) => p.id === tab?.profileId);
     if (!owningProfile?.private && !s.loading && s.url && /^https?:/i.test(s.url)) {
