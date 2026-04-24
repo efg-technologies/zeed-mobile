@@ -108,6 +108,9 @@ import Markdown from 'react-native-markdown-display';
 import Svg, { Circle, Line, Text as SvgText } from 'react-native-svg';
 import { parseAssistantMessage, type Segment, type GraphData } from './src/chat/render.ts';
 import { layoutCircular } from './src/chat/graph.ts';
+import {
+  DEFAULT_PROFILES, defaultGroupFor, type Profile,
+} from './src/profile/types.ts';
 
 const secureStoreBackend: SecureBackend = {
   getItemAsync: (k) => SecureStore.getItemAsync(k),
@@ -121,23 +124,25 @@ const HOME_URL = 'https://zeed.run';
 type Msg = { role: 'user' | 'assistant' | 'system'; content: string };
 type Tab = {
   id: string;
+  profileId: string;
+  groupId: string;
   url: string;
   title: string;
   loading: boolean;
   canGoBack: boolean;
   canGoForward: boolean;
-  private: boolean;
 };
 
 let tabSeq = 0;
-const newTab = (url = HOME_URL, isPrivate = false): Tab => ({
+const newTab = (profileId: string, groupId: string, url = HOME_URL): Tab => ({
   id: `t${++tabSeq}`,
+  profileId,
+  groupId,
   url,
   title: url,
   loading: false,
   canGoBack: false,
   canGoForward: false,
-  private: isPrivate,
 });
 
 export default function App() {
@@ -152,12 +157,25 @@ export default function App() {
 function AppBody() {
   const insets = useSafeAreaInsets();
   const webviewRefs = useRef<Record<string, WebView | null>>({});
-  const initialTab = useMemo(() => newTab(), []);
+  const [profiles] = useState<Profile[]>(DEFAULT_PROFILES);
+  const [activeProfileId, setActiveProfileId] = useState<string>('personal');
+  const activeProfileIdRef = useRef('personal');
+  activeProfileIdRef.current = activeProfileId;
+  const initialTab = useMemo(
+    () => newTab('personal', defaultGroupFor('personal').id),
+    [],
+  );
   const [tabs, setTabs] = useState<Tab[]>(() => [initialTab]);
   const [activeId, setActiveId] = useState<string>(initialTab.id);
+  const activeProfile = profiles.find((p) => p.id === activeProfileId) ?? profiles[0]!;
+  const isProfilePrivate = (profileId: string) =>
+    profiles.find((p) => p.id === profileId)?.private ?? false;
   const [tabListOpen, setTabListOpen] = useState(false);
 
-  const active: Tab = tabs.find((t) => t.id === activeId) ?? tabs[0]!;
+  const profileTabs = tabs.filter((t) => t.profileId === activeProfileId);
+  const active: Tab = profileTabs.find((t) => t.id === activeId)
+    ?? profileTabs[0]
+    ?? tabs[0]!;
   const [urlInput, setUrlInput] = useState(active.url);
   const [messages, setMessages] = useState<Msg[]>([]);
   const [chatPanelOpen, setChatPanelOpen] = useState(false);
@@ -167,9 +185,8 @@ function AppBody() {
   const [dots, setDots] = useState('');
   const [logsOpen, setLogsOpen] = useState(false);
   const [mode, setMode] = useState<'auto' | 'ask' | 'search'>('auto');
-  const [privateMode, setPrivateMode] = useState(false);
   const privateModeRef = useRef(false);
-  privateModeRef.current = privateMode;
+  privateModeRef.current = activeProfile.private;
 
   useEffect(() => {
     if (!busy) { setDots(''); return; }
@@ -221,13 +238,8 @@ function AppBody() {
     sendHeartbeatIfNewDay(telemetryDeps).catch(() => { /* ignore */ });
   }, [telemetryDeps]);
 
-  // Active-tab ref mirrors `active` so fire-and-forget telemetry callbacks
-  // can cheaply check privacy without closing over state.
-  const activeRef = useRef<Tab | null>(null);
-  activeRef.current = active;
-
   const telFeature = useCallback((f: FeatureCode) => {
-    if (privateModeRef.current || activeRef.current?.private) return;
+    if (privateModeRef.current) return;
     sendFeatureUsed(telemetryDeps, f).catch(() => { /* ignore */ });
   }, [telemetryDeps]);
 
@@ -238,7 +250,8 @@ function AppBody() {
       if (!incoming) return;
       if (!/^https?:\/\//i.test(incoming)) return;
       logger.info(`incoming URL: ${incoming.slice(0, 120)}`);
-      const t = newTab(incoming);
+      const pid = activeProfileIdRef.current;
+      const t = newTab(pid, defaultGroupFor(pid).id, incoming);
       setTabs((ts) => [...ts, t]);
       setActiveId(t.id);
       setUrlInput(incoming);
@@ -394,15 +407,15 @@ function AppBody() {
     });
     if (tabId === activeId && !urlFocused) setUrlInput(s.url);
     const tab = tabs.find((t) => t.id === tabId);
-    const isPrivate = privateMode || tab?.private;
-    if (!isPrivate && !s.loading && s.url && /^https?:/i.test(s.url)) {
+    const owningProfile = profiles.find((p) => p.id === tab?.profileId);
+    if (!owningProfile?.private && !s.loading && s.url && /^https?:/i.test(s.url)) {
       setHistory((prev) => {
         const next = recordVisit(prev, s.url, s.title || s.url, Date.now());
         saveHistory(AsyncStorage, next).catch(() => { /* ignore */ });
         return next;
       });
     }
-  }, [activeId, urlFocused, updateTab, tabs, privateMode]);
+  }, [activeId, urlFocused, updateTab, tabs, profiles]);
 
   const runTaskWith = useCallback(async (goalRaw: string) => {
     const goal = goalRaw.trim();
@@ -499,7 +512,7 @@ function AppBody() {
         },
       });
       logger.info(`agent end: ok=${result.ok} ${result.error ?? ''}`);
-      if (!privateModeRef.current && !activeRef.current?.private) {
+      if (!privateModeRef.current) {
         sendAgentRun(telemetryDeps, {
           success: result.ok,
           stepCount: result.steps.length,
@@ -515,7 +528,7 @@ function AppBody() {
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e);
       logger.error(`agent threw: ${msg}`);
-      if (!privateModeRef.current && !activeRef.current?.private) {
+      if (!privateModeRef.current) {
         sendAgentRun(telemetryDeps, { success: false, stepCount: 0, endReason: 'error' })
           .catch(() => { /* ignore */ });
       }
@@ -550,15 +563,17 @@ function AppBody() {
   // Auto   : URL-like / shortcut → navigate; else → agent
   // Ask    : always hand the input to the agent
   // Search : always navigate (URL) or Google-search (free text)
+  // Private profile overrides: AI is off, everything is a search/navigate.
   const onOmniboxPrimary = useCallback(() => {
     const q = urlInput.trim();
     if (!q) return;
+    if (activeProfile.private) { onUrlSubmit(); return; }
     if (mode === 'ask') { runAskFromOmnibox(); return; }
     if (mode === 'search') { onUrlSubmit(); return; }
     const urlLike = /^https?:\/\//i.test(q) || /^[^\s]+\.[a-z]{2,}(\/|$)/i.test(q);
     if (urlLike || shortcutUrl) onUrlSubmit();
     else runAskFromOmnibox();
-  }, [mode, urlInput, shortcutUrl, onUrlSubmit, runAskFromOmnibox]);
+  }, [mode, urlInput, shortcutUrl, onUrlSubmit, runAskFromOmnibox, activeProfile.private]);
 
   const updateSettings = useCallback(async (patch: Partial<Settings>) => {
     setSettings((prev) => {
@@ -581,43 +596,46 @@ function AppBody() {
     saveLikes(AsyncStorage, []).catch(() => { /* ignore */ });
   }, []);
 
-  const changePrivateMode = useCallback((next: boolean) => {
-    const wasPrivate = privateModeRef.current;
-    setPrivateMode(next);
-    if (wasPrivate && !next) {
-      // Exiting private: wipe everything that existed during the session.
-      // Tabs that were explicitly private, the chat history, the debug log
-      // ring buffer, the current suggestions, and any in-flight input. The
-      // WebView key flip above will also drop each WKWebView's
-      // nonPersistent store so cookies / session data vanish.
+  const switchProfile = useCallback((nextId: string) => {
+    const fromProfile = profiles.find((p) => p.id === activeProfileId);
+    const toProfile = profiles.find((p) => p.id === nextId);
+    if (!toProfile) return;
+    logger.info(`profile: switch ${activeProfileId} → ${nextId}`);
+
+    // Leaving a private profile wipes every trace of the session:
+    // its tabs (their WKWebView nonPersistent stores drop with them),
+    // chat history, debug log buffer, any in-flight omnibox state.
+    if (fromProfile?.private) {
       logger.info('private: session ended, wiping ephemeral state');
       setMessages([]);
       setChatPanelOpen(false);
       setLastStep(null);
       setPrevStep(null);
-      setUrlInput('');
-      setUrlFocused(false);
       setGoogleSugg([]);
-      setTabs((ts) => {
-        const survivors = ts.filter((t) => !t.private);
-        if (survivors.length === 0) {
-          const fresh = newTab();
-          setActiveId(fresh.id);
-          setUrlInput(fresh.url);
-          return [fresh];
-        }
-        if (!survivors.some((t) => t.id === activeId)) {
-          const first = survivors[0]!;
-          setActiveId(first.id);
-          setUrlInput(first.url);
-        }
-        return survivors;
-      });
-      // Clear logs LAST so the 'session ended' line above is retained for
-      // one render before wipe — then immediately drop the buffer.
-      clearLogs();
+      setTabs((ts) => ts.filter((t) => t.profileId !== fromProfile.id));
     }
-  }, [activeId]);
+
+    setActiveProfileId(nextId);
+
+    // Pick an active tab in the new profile, creating a default one if
+    // the profile was empty.
+    setTabs((ts) => {
+      let scoped = ts.filter((t) => t.profileId === nextId);
+      let list = ts;
+      if (scoped.length === 0) {
+        const fresh = newTab(nextId, defaultGroupFor(nextId).id);
+        list = [...ts, fresh];
+        scoped = [fresh];
+      }
+      const first = scoped[0]!;
+      setActiveId(first.id);
+      setUrlInput(first.url);
+      return list;
+    });
+    setUrlFocused(false);
+
+    if (fromProfile?.private) clearLogs();
+  }, [activeProfileId, profiles]);
 
   const shareActivePage = useCallback(async () => {
     const url = active.url;
@@ -646,13 +664,14 @@ function AppBody() {
   const reload = useCallback(() => webviewRefs.current[activeId]?.reload(), [activeId]);
 
   const openNewTab = useCallback(() => {
-    const t = newTab(HOME_URL, privateMode);
+    const groupId = defaultGroupFor(activeProfileId).id;
+    const t = newTab(activeProfileId, groupId, HOME_URL);
     setTabs((ts) => [...ts, t]);
     setActiveId(t.id);
     setUrlInput(t.url);
     setTabListOpen(false);
-    if (!privateMode) telFeature('tab_new');
-  }, [telFeature, privateMode]);
+    if (!activeProfile.private) telFeature('tab_new');
+  }, [telFeature, activeProfileId, activeProfile.private]);
 
   const openBookmark = useCallback((b: Bookmark) => {
     updateTab(activeId, { url: b.url });
@@ -679,21 +698,22 @@ function AppBody() {
     telFeature('tab_close');
     setTabs((ts) => {
       const next = ts.filter((t) => t.id !== id);
-      if (next.length === 0) {
-        const fresh = newTab();
+      const inProfile = next.filter((t) => t.profileId === activeProfileId);
+      if (inProfile.length === 0) {
+        const fresh = newTab(activeProfileId, defaultGroupFor(activeProfileId).id);
         setActiveId(fresh.id);
         setUrlInput(fresh.url);
-        return [fresh];
+        return [...next, fresh];
       }
       if (id === activeId) {
-        const first = next[0]!;
+        const first = inProfile[0]!;
         setActiveId(first.id);
         setUrlInput(first.url);
       }
       return next;
     });
     delete webviewRefs.current[id];
-  }, [activeId, telFeature]);
+  }, [activeId, activeProfileId, telFeature]);
 
   const chatRendered = useMemo(() => messages.map((m, i) => {
     if (m.role === 'assistant') {
@@ -718,11 +738,11 @@ function AppBody() {
         style={styles.flex1}
       >
         <Pressable
-          style={[styles.topBar, (active.private || privateMode) && styles.topBarPrivate]}
+          style={[styles.topBar, activeProfile.private && styles.topBarPrivate]}
           onLongPress={shareActivePage}
           delayLongPress={350}
         >
-          {(active.private || privateMode) && (
+          {activeProfile.private && (
             <Text style={styles.topPrivate}>PRIVATE  </Text>
           )}
           <Text style={styles.topHost} numberOfLines={1}>{hostnameOf(active.url)}</Text>
@@ -731,14 +751,14 @@ function AppBody() {
           <View style={styles.progressBar} />
         )}
         <View style={styles.webWrap}>
-          {tabs.map((t) => (
+          {profileTabs.map((t) => (
             <View
               key={t.id}
               style={[styles.webLayer, t.id === activeId ? styles.webLayerActive : styles.webLayerHidden]}
               pointerEvents={t.id === activeId ? 'auto' : 'none'}
             >
               <WebView
-                key={`${t.id}:${(t.private || privateMode) ? 'p' : 'n'}`}
+                key={`${t.id}:${isProfilePrivate(t.profileId) ? 'p' : 'n'}`}
                 ref={(r) => { webviewRefs.current[t.id] = r; }}
                 source={{ uri: t.url }}
                 onMessage={onWebViewMessage}
@@ -748,7 +768,7 @@ function AppBody() {
                 originWhitelist={['*']}
                 javaScriptEnabled
                 domStorageEnabled
-                incognito={t.private || privateMode}
+                incognito={isProfilePrivate(t.profileId)}
                 allowsBackForwardNavigationGestures
                 pullToRefreshEnabled
                 decelerationRate="normal"
@@ -789,8 +809,8 @@ function AppBody() {
         </View>
         {tabListOpen && (
           <ScrollView style={styles.tabList} contentContainerStyle={styles.tabListContent}>
-            <Text style={styles.tabListHeader}>Tabs</Text>
-            {tabs.map((t) => {
+            <Text style={styles.tabListHeader}>Tabs · {activeProfile.name}</Text>
+            {profileTabs.map((t) => {
               const favicon = faviconFor(t.url);
               return (
                 <Pressable
@@ -807,7 +827,7 @@ function AppBody() {
                   </View>
                   <View style={styles.tabCardBody}>
                     <View style={styles.tabCardTitleRow}>
-                      {t.private && (
+                      {isProfilePrivate(t.profileId) && (
                         <Text style={styles.tabCardPrivate}>PRIVATE</Text>
                       )}
                       <Text style={styles.tabCardTitle} numberOfLines={1}>
@@ -924,7 +944,7 @@ function AppBody() {
           </ScrollView>
         )}
         <View style={[styles.bottomStack, { paddingBottom: insets.bottom }]}>
-        <View style={styles.modeBar}>
+        {!activeProfile.private && <View style={styles.modeBar}>
           {(['auto', 'ask', 'search'] as const).map((m) => (
             <Pressable
               key={m}
@@ -937,7 +957,7 @@ function AppBody() {
             </Pressable>
           ))}
           <Text style={styles.modeHint}>{MODE_HINT[mode]}</Text>
-        </View>
+        </View>}
         <View style={styles.omnibox}>
           <View style={styles.omniInputWrap}>
             <TextInput
@@ -949,7 +969,7 @@ function AppBody() {
               onBlur={() => setUrlFocused(false)}
               autoCapitalize="none"
               autoCorrect={false}
-              placeholder={MODE_PLACEHOLDER[mode]}
+              placeholder={activeProfile.private ? 'Search or enter URL (AI off)' : MODE_PLACEHOLDER[mode]}
               placeholderTextColor="#666"
               selectTextOnFocus
               returnKeyType={mode === 'search' ? 'go' : 'send'}
@@ -994,17 +1014,11 @@ function AppBody() {
             </Text>
           </Pressable>
           <Pressable onPress={() => setTabListOpen((v) => !v)} style={styles.toolTabPill}>
-            <Text style={styles.toolTabPillText}>{tabs.length}</Text>
+            <Text style={styles.toolTabPillText}>{profileTabs.length}</Text>
           </Pressable>
           <Pressable
             onPress={openNewTab}
-            onLongPress={() => {
-              const t = newTab(HOME_URL, true);
-              setTabs((ts) => [...ts, t]);
-              setActiveId(t.id);
-              setUrlInput(t.url);
-              setTabListOpen(false);
-            }}
+            onLongPress={() => switchProfile('private')}
             delayLongPress={300}
             style={styles.toolBtn}
           >
@@ -1026,8 +1040,9 @@ function AppBody() {
         onClearBookmarks={clearBookmarksAction}
         onClearLikes={clearLikesAction}
         onOpenLogs={() => { setSettingsOpen(false); setLogsOpen(true); }}
-        privateMode={privateMode}
-        onChangePrivateMode={changePrivateMode}
+        profiles={profiles}
+        activeProfileId={activeProfileId}
+        onSwitchProfile={(id) => { setSettingsOpen(false); switchProfile(id); }}
       />
       <LogsModal visible={logsOpen} onClose={() => setLogsOpen(false)} />
 
@@ -1090,8 +1105,9 @@ function SettingsModal(props: {
   onClearBookmarks: () => void;
   onClearLikes: () => void;
   onOpenLogs: () => void;
-  privateMode: boolean;
-  onChangePrivateMode: (v: boolean) => void;
+  profiles: Profile[];
+  activeProfileId: string;
+  onSwitchProfile: (id: string) => void;
 }) {
   const [apiKeyInput, setApiKeyInput] = useState('');
   const [hasStoredKey, setHasStoredKey] = useState(false);
@@ -1169,21 +1185,28 @@ function SettingsModal(props: {
             </View>
           </View>
 
-          <Text style={styles.modalSectionHeader}>Private</Text>
+          <Text style={styles.modalSectionHeader}>Profile</Text>
           <View style={styles.modalCard}>
-            <View style={styles.modalRowBetween}>
-              <View style={styles.modalSwitchLabel}>
-                <Text style={styles.modalLabel}>Private mode</Text>
-                <Text style={styles.modalHint}>
-                  New tabs skip history, cookies, and telemetry. Long-press the + button for a one-off private tab.
+            <Text style={styles.modalHint}>
+              Profiles are a hard boundary: memory, tabs, chat, telemetry don't
+              cross. The Private profile keeps nothing — exiting wipes it.
+              AI features (Ask / research) are off while Private is active.
+            </Text>
+            {props.profiles.map((p) => (
+              <Pressable
+                key={p.id}
+                onPress={() => props.onSwitchProfile(p.id)}
+                style={[
+                  styles.modalBtnRow,
+                  p.id === props.activeProfileId && styles.modalBtnRowActive,
+                ]}
+              >
+                <Text style={styles.modalBtnRowText}>
+                  {p.name}{p.private ? '  · private' : ''}
+                  {p.id === props.activeProfileId ? '   (active)' : ''}
                 </Text>
-              </View>
-              <Switch
-                value={props.privateMode}
-                onValueChange={props.onChangePrivateMode}
-                trackColor={{ false: '#444', true: '#5B21B6' }}
-              />
-            </View>
+              </Pressable>
+            ))}
           </View>
 
           <Text style={styles.modalSectionHeader}>Search</Text>
@@ -1748,6 +1771,10 @@ const styles = StyleSheet.create({
   },
   modalBtnGhostText: { color: '#bbb' },
   modalBtnRow: { paddingVertical: 10 },
+  modalBtnRowActive: {
+    backgroundColor: 'rgba(91,33,182,0.18)', borderRadius: 8,
+    paddingHorizontal: 10,
+  },
   modalBtnRowText: { color: '#fff', fontSize: 14 },
   modalFooter: { color: '#555', fontSize: 11, textAlign: 'center', marginTop: 20 },
 
