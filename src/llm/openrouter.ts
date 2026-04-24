@@ -13,9 +13,9 @@ export interface ChatOptions {
   /** Inject custom fetch for tests */
   fetchImpl?: typeof fetch;
   signal?: AbortSignal;
-  /** Cap response length; default 1024 tokens — enough for an action JSON
-   * or a few paragraphs of markdown, without letting a runaway reply
-   * burn budget. */
+  /** Cap response length; default 2048 tokens — enough for a detailed
+   * finish summary (markdown list of options / criteria) without letting
+   * a runaway reply burn budget. Action JSON turns are typically tiny. */
   maxTokens?: number;
 }
 
@@ -49,7 +49,7 @@ export async function chat(
     model,
     messages,
     stream: false,
-    max_tokens: opts.maxTokens ?? 1024,
+    max_tokens: opts.maxTokens ?? 2048,
   };
   if (typeof opts.temperature === 'number') body['temperature'] = opts.temperature;
   const f = opts.fetchImpl ?? fetch;

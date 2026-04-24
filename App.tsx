@@ -20,6 +20,7 @@ import {
   buildClickByLabelJs, buildClickBySelectorJs, buildReadPageJs,
 } from './src/webview/bridge.ts';
 import { normalizeUrlOrSearch } from './src/webview/url.ts';
+import { buildStartPageHtml, NEW_TAB_URL } from './src/webview/startpage.ts';
 
 function faviconFor(u: string): string | null {
   try {
@@ -32,6 +33,7 @@ function faviconFor(u: string): string | null {
 }
 
 function hostnameOf(u: string): string {
+  if (u === 'about:newtab' || u === 'about:blank') return 'new tab';
   try {
     return new URL(u).hostname || u;
   } catch {
@@ -119,7 +121,7 @@ const secureStoreBackend: SecureBackend = {
 };
 setSecureBackend(secureStoreBackend);
 
-const HOME_URL = 'https://zeed.run';
+const HOME_URL = NEW_TAB_URL;
 
 type Msg = { role: 'user' | 'assistant' | 'system'; content: string };
 type Tab = {
@@ -319,6 +321,12 @@ function AppBody() {
     () => resolveShortcut(urlInput, { bookmarks, likes, history }),
     [urlInput, bookmarks, likes, history],
   );
+
+  const startPageHtml = useMemo(() => buildStartPageHtml({
+    bookmarks: bookmarks.map((b) => ({ url: b.url, title: b.title })),
+    recent: history.slice(0, 12).map((h) => ({ url: h.url, title: h.title })),
+    profileName: activeProfile.name,
+  }), [bookmarks, history, activeProfile.name]);
 
   const suggestions: Suggestion[] = useMemo(
     () => (urlFocused
@@ -760,7 +768,9 @@ function AppBody() {
               <WebView
                 key={`${t.id}:${isProfilePrivate(t.profileId) ? 'p' : 'n'}`}
                 ref={(r) => { webviewRefs.current[t.id] = r; }}
-                source={{ uri: t.url }}
+                source={t.url === NEW_TAB_URL
+                  ? { html: startPageHtml, baseUrl: 'about:newtab' }
+                  : { uri: t.url }}
                 onMessage={onWebViewMessage}
                 onNavigationStateChange={(s) => onNavStateChange(t.id, s)}
                 onLoadStart={() => updateTab(t.id, { loading: true })}
@@ -986,7 +996,7 @@ function AppBody() {
           <View style={styles.omniInputWrap}>
             <TextInput
               style={styles.omniInput}
-              value={urlInput}
+              value={urlInput === NEW_TAB_URL ? '' : urlInput}
               onChangeText={setUrlInput}
               onSubmitEditing={onOmniboxPrimary}
               onFocus={() => setUrlFocused(true)}
