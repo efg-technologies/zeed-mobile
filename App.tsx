@@ -457,7 +457,8 @@ function AppBody() {
     const goal = urlInput.trim();
     if (!goal) return;
     setUrlInput('');
-    // Intentionally keep focus + keyboard so user can chain follow-ups.
+    setUrlFocused(false);
+    Keyboard.dismiss();
     // Auto mode keeps the browser view primary and shows a translucent
     // step card; Ask mode opens the full chat panel as before.
     if (mode !== 'auto') setChatPanelOpen(true);
