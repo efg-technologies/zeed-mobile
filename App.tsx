@@ -6,7 +6,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import {
   Alert, Image, Keyboard, KeyboardAvoidingView, Modal, Platform, Pressable,
-  SafeAreaView, ScrollView, StyleSheet, Switch, Text, TextInput, View,
+  SafeAreaView, ScrollView, Share, StyleSheet, Switch, Text, TextInput, View,
 } from 'react-native';
 import { WebView, type WebViewMessageEvent, type WebViewNavigation } from 'react-native-webview';
 import * as SecureStore from 'expo-secure-store';
@@ -398,6 +398,20 @@ export default function App() {
     saveLikes(AsyncStorage, []).catch(() => { /* ignore */ });
   }, []);
 
+  const shareActivePage = useCallback(async () => {
+    const url = active.url;
+    if (!url || /^about:/i.test(url)) return;
+    try {
+      logger.info(`share: ${url}`);
+      await Share.share({
+        url,
+        message: active.title ? `${active.title}\n${url}` : url,
+      });
+    } catch (e) {
+      logger.warn(`share failed: ${e instanceof Error ? e.message : String(e)}`);
+    }
+  }, [active.url, active.title]);
+
   const goBack = useCallback(() => webviewRefs.current[activeId]?.goBack(), [activeId]);
   const goForward = useCallback(() => webviewRefs.current[activeId]?.goForward(), [activeId]);
   const reload = useCallback(() => webviewRefs.current[activeId]?.reload(), [activeId]);
@@ -462,9 +476,13 @@ export default function App() {
         behavior={Platform.OS === 'ios' ? 'padding' : undefined}
         style={styles.flex1}
       >
-        <View style={styles.topBar}>
+        <Pressable
+          style={styles.topBar}
+          onLongPress={shareActivePage}
+          delayLongPress={350}
+        >
           <Text style={styles.topHost} numberOfLines={1}>{hostnameOf(active.url)}</Text>
-        </View>
+        </Pressable>
         {active.loading && (
           <View style={styles.progressBar} />
         )}
@@ -705,6 +723,7 @@ export default function App() {
         bookmarked={activeBookmarked}
         onToggleLike={() => { toggleCurrentLike(); setActionMenuOpen(false); }}
         onToggleBookmark={() => { toggleCurrentBookmark(); setActionMenuOpen(false); }}
+        onShare={() => { setActionMenuOpen(false); shareActivePage(); }}
         onSubscribeRss={() => {
           setActionMenuOpen(false);
           Alert.alert('RSS subscribe', 'Coming soon. Will detect feeds on the page.');
@@ -870,6 +889,7 @@ function ActionMenuModal(props: {
   bookmarked: boolean;
   onToggleLike: () => void;
   onToggleBookmark: () => void;
+  onShare: () => void;
   onSubscribeRss: () => void;
 }) {
   return (
@@ -888,6 +908,9 @@ function ActionMenuModal(props: {
             <Text style={styles.menuText}>
               {props.bookmarked ? 'Remove bookmark' : 'Add bookmark'}
             </Text>
+          </Pressable>
+          <Pressable onPress={props.onShare} style={styles.menuRow}>
+            <Text style={styles.menuText}>Share…</Text>
           </Pressable>
           <Pressable onPress={props.onSubscribeRss} style={styles.menuRow}>
             <Text style={styles.menuText}>Subscribe RSS (coming soon)</Text>
