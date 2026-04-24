@@ -775,15 +775,24 @@ function AppBody() {
               pointerEvents={t.id === activeId ? 'auto' : 'none'}
             >
               <WebView
-                key={`${t.id}:${isProfilePrivate(t.profileId) ? 'p' : 'n'}`}
+                key={`${t.id}:${isProfilePrivate(t.profileId) ? 'p' : 'n'}:${t.url === NEW_TAB_URL ? 'home' : 'web'}`}
                 ref={(r) => { webviewRefs.current[t.id] = r; }}
                 source={t.url === NEW_TAB_URL
-                  ? { html: startPageHtml, baseUrl: 'about:newtab' }
+                  ? { html: startPageHtml }
                   : { uri: t.url }}
                 onMessage={onWebViewMessage}
                 onNavigationStateChange={(s) => onNavStateChange(t.id, s)}
-                onLoadStart={() => updateTab(t.id, { loading: true })}
-                onLoadEnd={() => updateTab(t.id, { loading: false })}
+                onLoadStart={(e) => {
+                  logger.debug(`wv loadStart (${t.id}) url=${e.nativeEvent.url}`);
+                  updateTab(t.id, { loading: true });
+                }}
+                onLoadEnd={(e) => {
+                  logger.debug(`wv loadEnd (${t.id}) url=${e.nativeEvent.url}`);
+                  updateTab(t.id, { loading: false });
+                }}
+                onError={(e) => {
+                  logger.warn(`wv error (${t.id}): ${e.nativeEvent.description ?? 'unknown'}`);
+                }}
                 onOpenWindow={(e) => {
                   const target = e.nativeEvent.targetUrl;
                   if (!target) return;
