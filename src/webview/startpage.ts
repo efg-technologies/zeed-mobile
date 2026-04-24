@@ -55,7 +55,8 @@ export function buildStartPageHtml(opts: {
   main { max-width: 720px; margin: 0 auto;
     padding: 56px 20px calc(24px + env(safe-area-inset-bottom)); }
   header { text-align: center; margin-bottom: 40px; }
-  .brand { font-size: 34px; font-weight: 700; letter-spacing: 0.5px; color: #fff; }
+  .logo { width: 72px; height: 72px; display: block; margin: 0 auto 12px; }
+  .brand { font-size: 28px; font-weight: 700; letter-spacing: 0.5px; color: #fff; }
   .sub { font-size: 12px; color: #5B21B6; letter-spacing: 1.5px;
     text-transform: uppercase; margin-top: 6px; }
   h2 { color: #888; font-size: 11px; font-weight: 700; letter-spacing: 1.2px;
@@ -82,6 +83,13 @@ export function buildStartPageHtml(opts: {
 </head><body>
 <main>
   <header>
+    <svg class="logo" viewBox="0 0 64 64" xmlns="http://www.w3.org/2000/svg" aria-label="Zeed">
+      <rect width="64" height="64" rx="10" fill="#1A1A1F"/>
+      <polygon points="14,14 50,14 14,40" fill="#b99aff"/>
+      <polygon points="14,14 50,14 50,40" fill="#5B21B6" fill-opacity="0.4"/>
+      <polygon points="14,50 50,24 50,50" fill="#b99aff"/>
+      <polygon points="50,24 50,50 14,50" fill="#5B21B6" fill-opacity="0.55"/>
+    </svg>
     <div class="brand">Zeed</div>
     <div class="sub">${subtitle || 'think with you'}</div>
   </header>
