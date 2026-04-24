@@ -62,3 +62,9 @@ test('buildReadPageJs: produces parseable JS', () => {
   const js = buildReadPageJs();
   assert.doesNotThrow(() => new Function(`return ${js};`));
 });
+
+test('buildReadPageJs: posts back via ReactNativeWebView.postMessage', () => {
+  const js = buildReadPageJs();
+  assert.match(js, /window\.ReactNativeWebView\.postMessage/);
+  assert.match(js, /type:'read_page'/);
+});

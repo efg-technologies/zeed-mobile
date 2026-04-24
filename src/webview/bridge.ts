@@ -55,24 +55,58 @@ export function buildClickBySelectorJs(selector: string): string {
 })()`;
 }
 
-/** Build JS that reads interactive elements + text of current page. */
+/** Build JS that reads the page and POSTS an observation back to RN via
+ * window.ReactNativeWebView.postMessage. The App-side onMessage handler
+ * expects { type:'read_page', url, title, text, interactives }. */
 export function buildReadPageJs(interactiveOnly = false): string {
   const IO = interactiveOnly ? 'true' : 'false';
   return `(function(){
-  var interactiveOnly=${IO};
-  var out=[];
-  function textOf(el){ var t=(el.getAttribute('aria-label')||'').trim(); if(!t) t=(el.innerText||el.textContent||'').replace(/\\s+/g,' ').trim(); return t.slice(0,120); }
-  var interactiveSel='a[href],button,[role="button"],[role="link"],input,select,textarea,summary';
-  var links=[]; document.querySelectorAll('a[href]').forEach(function(a){ links.push({text:textOf(a),href:a.href}); });
-  var inters=[]; document.querySelectorAll(interactiveSel).forEach(function(el,i){ el.setAttribute('data-zeed-ref',String(i)); inters.push({ref:i,tag:el.tagName.toLowerCase(),label:textOf(el)}); });
-  var text=''; if(!interactiveOnly){ var main=document.querySelector('main,article,body'); text=((main&&(main.innerText||main.textContent))||'').replace(/\\s+/g,' ').slice(0,8000); }
-  out.push('=== META ===');
-  out.push('scrollY: '+window.scrollY+', scrollHeight: '+document.body.scrollHeight+', seenPct: '+Math.round((window.scrollY+window.innerHeight)/document.body.scrollHeight*100));
-  out.push('=== LINKS ('+links.length+') ===');
-  links.slice(0,50).forEach(function(l,i){ out.push(i+' | '+l.text+' | '+l.href); });
-  out.push('=== INTERACTIVE ('+inters.length+') ===');
-  inters.slice(0,50).forEach(function(e){ out.push('ref_'+e.ref+' | '+e.tag+' | '+e.label); });
-  if(text){ out.push('=== TEXT ==='); out.push(text); }
-  return out.join('\\n');
-})()`;
+  try {
+    var interactiveOnly=${IO};
+    function textOf(el){
+      var t=(el.getAttribute('aria-label')||'').trim();
+      if(!t) t=(el.innerText||el.textContent||'').replace(/\\s+/g,' ').trim();
+      if(!t) t=(el.getAttribute('title')||el.getAttribute('alt')||el.value||'').trim();
+      return t.slice(0,120);
+    }
+    function roleOf(el){
+      var r=(el.getAttribute('role')||'').toLowerCase(); if(r) return r;
+      var tag=el.tagName.toLowerCase();
+      if(tag==='a') return 'link';
+      if(tag==='button'||tag==='summary') return 'button';
+      if(tag==='input'){ var t=(el.getAttribute('type')||'').toLowerCase(); return t==='submit'||t==='button'?'button':(t||'input'); }
+      return tag;
+    }
+    var selectors='a[href],button,[role="button"],[role="link"],input,select,textarea,summary';
+    var inters=[];
+    document.querySelectorAll(selectors).forEach(function(el,i){
+      if(inters.length>=80) return;
+      el.setAttribute('data-zeed-ref',String(i));
+      var label=textOf(el);
+      if(!label) return;
+      inters.push({ref:String(i),role:roleOf(el),label:label});
+    });
+    var text='';
+    if(!interactiveOnly){
+      var main=document.querySelector('main,article,body');
+      text=((main&&(main.innerText||main.textContent))||'').replace(/\\s+/g,' ').slice(0,4000);
+    }
+    var payload={
+      type:'read_page',
+      url:location.href,
+      title:(document.title||'').slice(0,200),
+      text:text,
+      interactives:inters
+    };
+    window.ReactNativeWebView.postMessage(JSON.stringify(payload));
+  } catch(e) {
+    try {
+      window.ReactNativeWebView.postMessage(JSON.stringify({
+        type:'read_page',url:location.href,title:'',text:'',interactives:[],
+        error:(e&&e.message?e.message:String(e))
+      }));
+    } catch(_) {}
+  }
+  true;
+})();`;
 }

@@ -430,15 +430,6 @@ export default function App() {
         style={styles.flex1}
       >
         <View style={styles.topBar}>
-          <Pressable onPress={goBack} disabled={!active.canGoBack} style={styles.navBtn}>
-            <Text style={[styles.navBtnText, !active.canGoBack && styles.navBtnDisabled]}>‹</Text>
-          </Pressable>
-          <Pressable onPress={goForward} disabled={!active.canGoForward} style={styles.navBtn}>
-            <Text style={[styles.navBtnText, !active.canGoForward && styles.navBtnDisabled]}>›</Text>
-          </Pressable>
-          <Pressable onPress={reload} style={styles.navBtn}>
-            <Text style={styles.navBtnText}>↻</Text>
-          </Pressable>
           <View style={styles.topBarTitleWrap}>
             <Text style={styles.topBarTitle} numberOfLines={1}>
               {active.title && active.title !== active.url ? active.title : hostnameOf(active.url)}
@@ -619,6 +610,15 @@ export default function App() {
           </ScrollView>
         )}
         <View style={styles.omnibox}>
+          <Pressable onPress={goBack} disabled={!active.canGoBack} style={styles.omniNavBtn}>
+            <Text style={[styles.omniNavText, !active.canGoBack && styles.navBtnDisabled]}>‹</Text>
+          </Pressable>
+          <Pressable onPress={goForward} disabled={!active.canGoForward} style={styles.omniNavBtn}>
+            <Text style={[styles.omniNavText, !active.canGoForward && styles.navBtnDisabled]}>›</Text>
+          </Pressable>
+          <Pressable onPress={reload} style={styles.omniNavBtn}>
+            <Text style={styles.omniNavText}>↻</Text>
+          </Pressable>
           <TextInput
             style={styles.omniInput}
             value={urlInput}
@@ -633,15 +633,12 @@ export default function App() {
             selectTextOnFocus
             returnKeyType="go"
           />
-          <Pressable onPress={onUrlSubmit} style={styles.omniBtnGhost}>
-            <Text style={styles.omniBtnGhostText}>Go</Text>
-          </Pressable>
           <Pressable
             onPress={runAskFromOmnibox}
             disabled={busy || !urlInput.trim()}
             style={[styles.omniBtn, (busy || !urlInput.trim()) && styles.omniBtnDisabled]}
           >
-            <Text style={styles.omniBtnText}>{busy ? `Ask ${dots}` : 'Ask'}</Text>
+            <Text style={styles.omniBtnText}>{busy ? 'Ask' : 'Ask'}</Text>
           </Pressable>
         </View>
       </KeyboardAvoidingView>
@@ -1027,26 +1024,29 @@ const styles = StyleSheet.create({
     backgroundColor: '#1A1A1F',
     borderTopWidth: 1, borderTopColor: '#2A2A30',
   },
-  statusDots: { color: '#5B21B6', fontSize: 16, width: 24, fontFamily: Platform.OS === 'ios' ? 'Menlo' : 'monospace' },
+  statusDots: {
+    color: '#5B21B6', fontSize: 14, width: 32,
+    fontFamily: Platform.OS === 'ios' ? 'Menlo' : 'monospace',
+  },
   statusText: { color: '#bbb', fontSize: 12, flex: 1 },
 
   omnibox: {
-    flexDirection: 'row', alignItems: 'center', gap: 6,
-    paddingHorizontal: 8, paddingVertical: 8,
+    flexDirection: 'row', alignItems: 'center', gap: 4,
+    paddingHorizontal: 6, paddingVertical: 8,
     backgroundColor: '#1A1A1F',
     borderTopWidth: 1, borderTopColor: '#2A2A30',
   },
+  omniNavBtn: {
+    minWidth: 28, height: 36, justifyContent: 'center', alignItems: 'center',
+    paddingHorizontal: 4,
+  },
+  omniNavText: { color: '#ddd', fontSize: 18 },
   omniInput: {
     flex: 1, color: '#fff', backgroundColor: '#0F0F12',
-    borderRadius: 10, paddingHorizontal: 14, paddingVertical: 10, fontSize: 14,
+    borderRadius: 10, paddingHorizontal: 12, paddingVertical: 9, fontSize: 14,
   },
-  omniBtnGhost: {
-    paddingHorizontal: 12, paddingVertical: 10, borderRadius: 8,
-    borderWidth: 1, borderColor: '#2A2A30',
-  },
-  omniBtnGhostText: { color: '#ddd', fontSize: 13, fontWeight: '600' },
   omniBtn: {
-    paddingHorizontal: 14, paddingVertical: 10, borderRadius: 8,
+    paddingHorizontal: 14, paddingVertical: 9, borderRadius: 8,
     backgroundColor: '#5B21B6',
   },
   omniBtnDisabled: { backgroundColor: '#2A2A30' },
