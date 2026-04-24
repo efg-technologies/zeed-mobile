@@ -5,7 +5,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import {
-  Alert, Image, KeyboardAvoidingView, Modal, Platform, Pressable,
+  Alert, Image, Keyboard, KeyboardAvoidingView, Modal, Platform, Pressable,
   SafeAreaView, ScrollView, StyleSheet, Switch, Text, TextInput, View,
 } from 'react-native';
 import { WebView, type WebViewMessageEvent, type WebViewNavigation } from 'react-native-webview';
@@ -155,6 +155,15 @@ export default function App() {
   const activeLiked = isLiked(likes, active.url);
 
   const pendingObs = useRef<((o: PageObservation) => void) | null>(null);
+  const chatScrollRef = useRef<ScrollView | null>(null);
+
+  useEffect(() => {
+    if (!chatPanelOpen) return;
+    const t = setTimeout(() => {
+      chatScrollRef.current?.scrollToEnd({ animated: true });
+    }, 50);
+    return () => clearTimeout(t);
+  }, [messages, chatPanelOpen, lastStep]);
 
   const updateTab = useCallback((id: string, patch: Partial<Tab>) => {
     setTabs((ts) => ts.map((t) => (t.id === id ? { ...t, ...patch } : t)));
@@ -195,6 +204,7 @@ export default function App() {
     updateTab(activeId, { url: s.url });
     setUrlInput(s.url);
     setUrlFocused(false);
+    Keyboard.dismiss();
   }, [activeId, updateTab]);
 
   const observe = useCallback((): Promise<PageObservation> => {
@@ -340,7 +350,7 @@ export default function App() {
     const goal = urlInput.trim();
     if (!goal) return;
     setUrlInput('');
-    setUrlFocused(false);
+    // Intentionally keep focus + keyboard so user can chain follow-ups.
     setChatPanelOpen(true);
     await runTaskWith(goal);
   }, [urlInput, runTaskWith]);
@@ -350,6 +360,7 @@ export default function App() {
     updateTab(activeId, { url: target });
     setUrlInput(target);
     setUrlFocused(false);
+    Keyboard.dismiss();
   }, [urlInput, shortcutUrl, activeId, updateTab]);
 
   // Auto mode: URL-like or known shortcut → navigate; else → agent.
@@ -555,7 +566,13 @@ export default function App() {
                 <Text style={styles.chatPanelToggle}>hide</Text>
               </Pressable>
             </View>
-            <ScrollView style={styles.chatScroll}>{chatRendered}</ScrollView>
+            <ScrollView
+              ref={chatScrollRef}
+              style={styles.chatScroll}
+              onContentSizeChange={() => chatScrollRef.current?.scrollToEnd({ animated: false })}
+            >
+              {chatRendered}
+            </ScrollView>
           </View>
         )}
         {messages.length > 0 && !chatPanelOpen && (
