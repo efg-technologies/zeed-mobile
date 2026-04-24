@@ -508,6 +508,21 @@ export default function App() {
                 contentInsetAdjustmentBehavior="automatic"
                 overScrollMode="always"
                 nestedScrollEnabled
+                renderError={(domain, code, desc) => (
+                  <WebViewError
+                    url={t.url}
+                    code={code}
+                    desc={desc}
+                    domain={domain}
+                    onRetry={() => webviewRefs.current[t.id]?.reload()}
+                    onSearch={() => {
+                      const host = hostnameOf(t.url) || t.url;
+                      const target = `https://www.google.com/search?q=${encodeURIComponent(host)}`;
+                      updateTab(t.id, { url: target });
+                      if (t.id === activeId) setUrlInput(target);
+                    }}
+                  />
+                )}
               />
             </View>
           ))}
@@ -965,6 +980,49 @@ function LogsModal(props: { visible: boolean; onClose: () => void }) {
   );
 }
 
+function friendlyError(code: number, desc: string): { title: string; body: string } {
+  // Common NSURLErrorDomain codes; Android has its own set but these cover the
+  // day-to-day cases. Unknowns fall back to the WebView's own description.
+  switch (code) {
+    case -1003: return { title: "Can't find that site", body: 'The domain couldn’t be resolved. Double-check the spelling.' };
+    case -1009: return { title: 'You’re offline', body: 'Connect to Wi-Fi or cellular and try again.' };
+    case -1001: return { title: 'Request timed out', body: 'The server took too long to respond.' };
+    case -1200:
+    case -1202: return { title: 'Secure connection failed', body: 'The site’s certificate isn’t trusted.' };
+    case -999: return { title: 'Request cancelled', body: 'The page stopped loading.' };
+    default: return { title: "Couldn't load the page", body: desc || 'Something went wrong.' };
+  }
+}
+
+function WebViewError(props: {
+  url: string;
+  code: number;
+  desc: string;
+  domain: string | undefined;
+  onRetry: () => void;
+  onSearch: () => void;
+}) {
+  const { title, body } = friendlyError(props.code, props.desc);
+  const host = hostnameOf(props.url) || props.url;
+  return (
+    <View style={styles.errorRoot}>
+      <View style={styles.errorDot} />
+      <Text style={styles.errorTitle}>{title}</Text>
+      <Text style={styles.errorHost} numberOfLines={1}>{host}</Text>
+      <Text style={styles.errorBody}>{body}</Text>
+      <View style={styles.errorBtnRow}>
+        <Pressable onPress={props.onRetry} style={styles.errorBtn}>
+          <Text style={styles.errorBtnText}>Retry</Text>
+        </Pressable>
+        <Pressable onPress={props.onSearch} style={styles.errorBtnGhost}>
+          <Text style={styles.errorBtnGhostText}>Search instead</Text>
+        </Pressable>
+      </View>
+      <Text style={styles.errorCode}>{props.domain ?? ''} {props.code}</Text>
+    </View>
+  );
+}
+
 function formatTime(t: number): string {
   const d = new Date(t);
   const pad = (n: number) => n.toString().padStart(2, '0');
@@ -1204,4 +1262,33 @@ const styles = StyleSheet.create({
     paddingHorizontal: 16, paddingVertical: 14,
   },
   menuText: { color: '#fff', fontSize: 15 },
+
+  errorRoot: {
+    flex: 1, backgroundColor: '#0F0F12',
+    alignItems: 'center', justifyContent: 'center',
+    paddingHorizontal: 32, gap: 12,
+  },
+  errorDot: {
+    width: 14, height: 14, borderRadius: 7,
+    backgroundColor: '#5B21B6', marginBottom: 8,
+  },
+  errorTitle: { color: '#fff', fontSize: 20, fontWeight: '600' },
+  errorHost: { color: '#888', fontSize: 13 },
+  errorBody: { color: '#bbb', fontSize: 14, textAlign: 'center', lineHeight: 20 },
+  errorBtnRow: { flexDirection: 'row', gap: 10, marginTop: 16 },
+  errorBtn: {
+    backgroundColor: '#5B21B6', borderRadius: 10,
+    paddingHorizontal: 20, paddingVertical: 10,
+  },
+  errorBtnText: { color: '#fff', fontSize: 14, fontWeight: '600' },
+  errorBtnGhost: {
+    borderRadius: 10, borderWidth: 1, borderColor: '#2A2A30',
+    paddingHorizontal: 20, paddingVertical: 10,
+  },
+  errorBtnGhostText: { color: '#ddd', fontSize: 14 },
+  errorCode: {
+    position: 'absolute', bottom: 16,
+    color: '#333', fontSize: 10,
+    fontFamily: Platform.OS === 'ios' ? 'Menlo' : 'monospace',
+  },
 });
