@@ -424,6 +424,31 @@ function AppBody() {
       const result = await runAgent(goal, {
         observe,
         act,
+        research: async (query) => {
+          logger.info(`research: ${query.slice(0, 120)}`);
+          const ctrl = new AbortController();
+          const to = setTimeout(() => ctrl.abort(), 45000);
+          try {
+            const r = await chat(
+              apiKey,
+              [
+                { role: 'system', content: 'You are a concise research assistant. Use web search. Return a brief, factual summary (≤ 300 words) with concrete options or criteria. No fluff.' },
+                { role: 'user', content: query },
+              ],
+              { signal: ctrl.signal, webSearch: true, maxTokens: 700 },
+            );
+            if (r.error) {
+              logger.warn(`research error: ${r.error}`);
+              return { result: '', error: r.error };
+            }
+            logger.debug(`research ← ${r.response.slice(0, 200)}`);
+            return { result: r.response, error: null };
+          } catch (e) {
+            const msg = e instanceof Error ? e.message : String(e);
+            logger.error(`research threw: ${msg}`);
+            return { result: '', error: msg };
+          } finally { clearTimeout(to); }
+        },
         reason: async (msgs) => {
           // Keep the system prompt + goal + last 6 turns so context stays
           // bounded. 13+ accumulated messages at 4 KB each were tripping

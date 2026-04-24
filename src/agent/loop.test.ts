@@ -44,6 +44,15 @@ test('parseAction: missing tool errors', () => {
   assert.match((r as { error: string }).error, /missing tool/);
 });
 
+test('parseAction: accepts research tool', () => {
+  const r = parseAction('{"tool":"research","query":"pen criteria"}');
+  assert.ok(!('error' in r));
+  if (!('error' in r)) {
+    assert.equal(r.tool, 'research');
+    assert.equal(r.query, 'pen criteria');
+  }
+});
+
 test('observationToText: includes url + title + interactives', () => {
   const txt = observationToText(obs());
   assert.match(txt, /URL: https:\/\/example\.com/);
@@ -163,4 +172,38 @@ test('runAgent: max steps bounded', async () => {
   assert.equal(r.ok, false);
   assert.equal(r.steps.length, 3);
   assert.match(r.error ?? '', /max steps/);
+});
+
+test('runAgent: research action feeds result back as user msg then finishes', async () => {
+  const calls: string[] = [];
+  const responses = [
+    '{"tool":"research","query":"criteria for picking a pen"}',
+    '{"tool":"finish","summary":"criteria: grip, ink, price"}',
+  ];
+  let i = 0;
+  const r = await runAgent('pick the best pen for me', {
+    observe: async () => obs(),
+    act: async () => ({ ok: true }),
+    research: async (q) => { calls.push(q); return { result: 'grip, ink, price', error: null }; },
+    reason: async () => ({ response: responses[i++]!, error: null }),
+  });
+  assert.equal(r.ok, true);
+  assert.equal(calls.length, 1);
+  assert.match(calls[0]!, /criteria for picking/);
+  assert.match(r.summary, /criteria/);
+});
+
+test('runAgent: research with no dep wired is degraded, not fatal', async () => {
+  const responses = [
+    '{"tool":"research","query":"anything"}',
+    '{"tool":"finish","summary":"did my best"}',
+  ];
+  let i = 0;
+  const r = await runAgent('do a thing', {
+    observe: async () => obs(),
+    act: async () => ({ ok: true }),
+    reason: async () => ({ response: responses[i++]!, error: null }),
+    // no research dep
+  });
+  assert.equal(r.ok, true);
 });
