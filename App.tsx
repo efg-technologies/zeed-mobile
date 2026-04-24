@@ -765,11 +765,35 @@ function AppBody() {
                 onNavigationStateChange={(s) => onNavStateChange(t.id, s)}
                 onLoadStart={() => updateTab(t.id, { loading: true })}
                 onLoadEnd={() => updateTab(t.id, { loading: false })}
+                onOpenWindow={(e) => {
+                  const target = e.nativeEvent.targetUrl;
+                  if (!target) return;
+                  const group = defaultGroupFor(t.profileId).id;
+                  const nt = newTab(t.profileId, group, target);
+                  setTabs((ts) => [...ts, nt]);
+                  setActiveId(nt.id);
+                  setUrlInput(target);
+                }}
                 originWhitelist={['*']}
                 javaScriptEnabled
                 domStorageEnabled
                 incognito={isProfilePrivate(t.profileId)}
+                sharedCookiesEnabled
+                thirdPartyCookiesEnabled
                 allowsBackForwardNavigationGestures
+                allowsInlineMediaPlayback
+                allowsPictureInPictureMediaPlayback
+                allowsAirPlayForMediaPlayback
+                allowsFullscreenVideo
+                allowsLinkPreview
+                mediaPlaybackRequiresUserAction={false}
+                javaScriptCanOpenWindowsAutomatically
+                setSupportMultipleWindows
+                // Force a Safari-flavoured UA so sites (YouTube Shorts, news
+                // paywalls etc.) serve the mobile-Safari treatment instead of
+                // the default WebView fallback. applicationNameForUserAgent
+                // is appended to the WKWebView default UA on iOS.
+                applicationNameForUserAgent="Version/17.0 Mobile/15E148 Safari/604.1"
                 pullToRefreshEnabled
                 decelerationRate="normal"
                 contentInsetAdjustmentBehavior="automatic"
