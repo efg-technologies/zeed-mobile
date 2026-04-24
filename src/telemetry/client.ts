@@ -23,8 +23,8 @@ export interface TelemetryDeps {
   fetch: typeof fetch;
   now: () => number;
   randomHex: (bytes: number) => string;
-  version: string;   // e.g. 'mobile-ios/0.1.0'
-  os: 'ios' | 'android';
+  version: string;   // digits + dots only (e.g. '0.1.0') — worker validates
+  os: 'ios' | 'mac' | 'linux' | 'unknown';
   /** Tier A toggle. Default ON (matches browser). */
   tierAEnabled: () => boolean;
   logger?: {
@@ -65,13 +65,16 @@ async function post(
     deps.logger?.debug?.(`telemetry suppressed (opt-out): ${event.event}`);
     return;
   }
-  const payload = stripToAllowlist(event);
+  const stripped = stripToAllowlist(event);
+  // Worker expects a batch envelope { events: [...] }, matching the desktop
+  // client. Single-event posts are rejected with 400 'bad request'.
+  const body = JSON.stringify({ events: [stripped] });
   try {
     deps.logger?.debug?.(`telemetry → ${event.event}`);
     const r = await deps.fetch(TELEMETRY_ENDPOINT, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(payload),
+      body,
     });
     if (!r.ok) deps.logger?.warn?.(`telemetry HTTP ${r.status} for ${event.event}`);
   } catch (e) {

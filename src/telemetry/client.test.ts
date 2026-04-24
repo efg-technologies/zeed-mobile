@@ -21,7 +21,10 @@ function makeDeps(overrides: Partial<TelemetryDeps> = {}): {
 } {
   const posts: Array<{ url: string; body: unknown }> = [];
   const fakeFetch = (async (url: string | URL | Request, init?: RequestInit) => {
-    posts.push({ url: String(url), body: JSON.parse(String(init?.body ?? '{}')) });
+    // Unwrap the { events: [ev] } envelope for clearer assertions.
+    const raw = JSON.parse(String(init?.body ?? '{}'));
+    const body = raw.events?.[0] ?? raw;
+    posts.push({ url: String(url), body });
     return { ok: true, status: 200 } as Response;
   }) as unknown as typeof fetch;
   const deps: TelemetryDeps = {
@@ -29,7 +32,7 @@ function makeDeps(overrides: Partial<TelemetryDeps> = {}): {
     fetch: fakeFetch,
     now: () => 1_700_000_000_000,
     randomHex: (n) => 'a'.repeat(n * 2),
-    version: 'mobile-ios/0.1.0',
+    version: '0.1.0',
     os: 'ios',
     tierAEnabled: () => true,
     ...overrides,
@@ -64,7 +67,7 @@ test('sendInstallOnce: posts exactly once', async () => {
   const body = posts[0]!.body as Record<string, unknown>;
   assert.equal(body.event, 'install');
   assert.equal(body.os, 'ios');
-  assert.equal(body.version, 'mobile-ios/0.1.0');
+  assert.equal(body.version, '0.1.0');
   assert.ok(typeof body.install_id === 'string');
 });
 
@@ -131,6 +134,20 @@ test('tierAEnabled=false: nothing is posted', async () => {
   await sendFeatureUsed(deps, 'mode_auto');
   await sendAgentRun(deps, { success: true, stepCount: 1, endReason: 'finish' });
   assert.equal(posts.length, 0);
+});
+
+test('post wraps event in { events: [ev] } envelope (worker requires it)', async () => {
+  let bodyString = '';
+  const fakeFetch = (async (_url: string | URL | Request, init?: RequestInit) => {
+    bodyString = String(init?.body ?? '');
+    return { ok: true, status: 200 } as Response;
+  }) as unknown as typeof fetch;
+  const { deps } = makeDeps({ fetch: fakeFetch });
+  await sendSessionStart(deps);
+  const parsed = JSON.parse(bodyString);
+  assert.ok(Array.isArray(parsed.events));
+  assert.equal(parsed.events.length, 1);
+  assert.equal(parsed.events[0].event, 'session_start');
 });
 
 test('fetch error is swallowed (does not throw)', async () => {

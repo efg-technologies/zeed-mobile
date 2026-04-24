@@ -49,7 +49,9 @@ function randomHex(bytes: number): string {
   return out;
 }
 
-const APP_VERSION = `mobile-${Platform.OS}/0.1.0`;
+// Worker validates version as /^[0-9]+\.[0-9.]+$/, so no platform prefix.
+// Device kind is still distinguishable via `os` on install events.
+const APP_VERSION = '0.1.0';
 
 function agentEndReason(r: { ok: boolean; error?: string; suggestAutopilot?: boolean }): EndReason {
   if (r.ok) return 'finish';
@@ -192,7 +194,9 @@ function AppBody() {
     now: Date.now,
     randomHex,
     version: APP_VERSION,
-    os: Platform.OS === 'android' ? 'android' : 'ios',
+    // Worker currently accepts ios|mac|linux|unknown. Android reports
+    // 'unknown' until the worker schema is extended.
+    os: Platform.OS === 'ios' ? 'ios' : 'unknown',
     tierAEnabled: () => settingsRef.current.telemetryAggregateEnabled,
     logger: { debug: (m) => logger.debug(m), warn: (m) => logger.warn(m) },
   }), []);
@@ -400,7 +404,9 @@ function AppBody() {
         act,
         reason: async (msgs) => {
           const ctrl = new AbortController();
-          const to = setTimeout(() => ctrl.abort(), 30000);
+          // 60s: long tasks on large pages (Amazon SERPs etc.) can push the
+          // per-call LLM latency past 30s. Shorter values aborted real work.
+          const to = setTimeout(() => ctrl.abort(), 60000);
           logger.debug(`chat → openrouter (${msgs.length} msgs)`);
           try {
             const r = await chat(apiKey, msgs, { signal: ctrl.signal });
@@ -639,6 +645,19 @@ function AppBody() {
               />
             </View>
           ))}
+          {mode === 'auto' && busy && (
+            <Pressable
+              onPress={() => setChatPanelOpen(true)}
+              style={styles.autoStepCard}
+            >
+              {prevStep ? (
+                <Text style={styles.autoStepPrev} numberOfLines={1}>{prevStep}</Text>
+              ) : null}
+              <Text style={styles.autoStepNow} numberOfLines={1}>
+                {lastStep ?? 'thinking'}{dots}
+              </Text>
+            </Pressable>
+          )}
         </View>
         {tabListOpen && (
           <ScrollView style={styles.tabList} contentContainerStyle={styles.tabListContent}>
@@ -704,20 +723,6 @@ function AppBody() {
             })}
           </ScrollView>
         )}
-        {mode === 'auto' && busy && (
-          <Pressable
-            onPress={() => setChatPanelOpen(true)}
-            style={[styles.autoStepCard, { top: insets.top + 8 }]}
-            pointerEvents="box-none"
-          >
-            {prevStep ? (
-              <Text style={styles.autoStepPrev} numberOfLines={1}>{prevStep}</Text>
-            ) : null}
-            <Text style={styles.autoStepNow} numberOfLines={1}>
-              {lastStep ?? 'thinking'}{dots}
-            </Text>
-          </Pressable>
-        )}
         {messages.length > 0 && chatPanelOpen && (
           <View style={styles.chatPanel}>
             <View style={styles.chatPanelHeader}>
@@ -753,7 +758,7 @@ function AppBody() {
             </Text>
           </View>
         )}
-        {suggestions.length > 0 && (
+        {suggestions.length > 0 && !busy && (
           <ScrollView
             style={styles.suggestions}
             keyboardShouldPersistTaps="handled"
@@ -1309,10 +1314,10 @@ const styles = StyleSheet.create({
   },
   chatReopenText: { color: '#888', fontSize: 12 },
   autoStepCard: {
-    position: 'absolute', left: 12, right: 12, zIndex: 10,
+    position: 'absolute', left: 12, right: 12, bottom: 12, zIndex: 10,
     paddingVertical: 8, paddingHorizontal: 14, borderRadius: 12,
-    backgroundColor: 'rgba(26,26,31,0.78)',
-    borderWidth: 1, borderColor: 'rgba(91,33,182,0.35)',
+    backgroundColor: 'rgba(26,26,31,0.82)',
+    borderWidth: 1, borderColor: 'rgba(91,33,182,0.4)',
   },
   autoStepPrev: { color: 'rgba(200,200,210,0.45)', fontSize: 11, marginBottom: 1 },
   autoStepNow: { color: '#fff', fontSize: 12, fontWeight: '500' },
