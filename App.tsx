@@ -133,6 +133,9 @@ type Tab = {
   loading: boolean;
   canGoBack: boolean;
   canGoForward: boolean;
+  /** True if this tab was opened from a new-tab action, so the Start Page
+   * is its conceptual 'home'. Back past the first real URL returns to it. */
+  hasStartPage: boolean;
 };
 
 let tabSeq = 0;
@@ -145,6 +148,7 @@ const newTab = (profileId: string, groupId: string, url = HOME_URL): Tab => ({
   loading: false,
   canGoBack: false,
   canGoForward: false,
+  hasStartPage: url === HOME_URL,
 });
 
 export default function App() {
@@ -676,7 +680,23 @@ function AppBody() {
     }
   }, [active.url, active.title, telFeature]);
 
-  const goBack = useCallback(() => webviewRefs.current[activeId]?.goBack(), [activeId]);
+  const canGoBackEffective =
+    active.canGoBack || (active.hasStartPage && active.url !== NEW_TAB_URL);
+
+  const goBack = useCallback(() => {
+    const wv = webviewRefs.current[activeId];
+    // Prefer the WebView's own back stack; only fall back to the Start
+    // Page when nothing more is in history and this tab started there.
+    if (active.canGoBack && wv) {
+      wv.goBack();
+      return;
+    }
+    if (active.hasStartPage && active.url !== NEW_TAB_URL) {
+      updateTab(activeId, { url: NEW_TAB_URL, canGoBack: false, canGoForward: false });
+      setUrlInput('');
+      setUrlFocused(false);
+    }
+  }, [activeId, active.canGoBack, active.hasStartPage, active.url, updateTab]);
   const goForward = useCallback(() => webviewRefs.current[activeId]?.goForward(), [activeId]);
   const reload = useCallback(() => webviewRefs.current[activeId]?.reload(), [activeId]);
 
@@ -1046,8 +1066,8 @@ function AppBody() {
           </Pressable>
         </View>
         <View style={styles.toolBar}>
-          <Pressable onPress={goBack} disabled={!active.canGoBack} style={styles.toolBtn}>
-            <Text style={[styles.toolBtnText, !active.canGoBack && styles.navBtnDisabled]}>‹</Text>
+          <Pressable onPress={goBack} disabled={!canGoBackEffective} style={styles.toolBtn}>
+            <Text style={[styles.toolBtnText, !canGoBackEffective && styles.navBtnDisabled]}>‹</Text>
           </Pressable>
           <Pressable onPress={goForward} disabled={!active.canGoForward} style={styles.toolBtn}>
             <Text style={[styles.toolBtnText, !active.canGoForward && styles.navBtnDisabled]}>›</Text>
