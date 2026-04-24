@@ -4,6 +4,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import AsyncStorage from '@react-native-async-storage/async-storage';
+import * as Linking from 'expo-linking';
 import {
   Alert, Image, Keyboard, KeyboardAvoidingView, Modal, Platform, Pressable,
   SafeAreaView, ScrollView, Share, StyleSheet, Switch, Text, TextInput, View,
@@ -133,6 +134,23 @@ export default function App() {
     loadLikes(AsyncStorage).then(setLikes).catch(() => { /* ignore */ });
     loadHistory(AsyncStorage).then(setHistory).catch(() => { /* ignore */ });
     loadSettings(AsyncStorage).then(setSettings).catch(() => { /* ignore */ });
+  }, []);
+
+  // Default-browser handoff: when the OS hands us an http/https URL (via
+  // "Open in Zeed" / default-browser routing), open it in a fresh tab.
+  useEffect(() => {
+    const openUrl = (incoming: string | null) => {
+      if (!incoming) return;
+      if (!/^https?:\/\//i.test(incoming)) return;
+      logger.info(`incoming URL: ${incoming.slice(0, 120)}`);
+      const t = newTab(incoming);
+      setTabs((ts) => [...ts, t]);
+      setActiveId(t.id);
+      setUrlInput(incoming);
+    };
+    Linking.getInitialURL().then(openUrl).catch(() => { /* ignore */ });
+    const sub = Linking.addEventListener('url', (e) => openUrl(e.url));
+    return () => sub.remove();
   }, []);
 
   const toggleCurrentBookmark = useCallback(() => {
@@ -504,6 +522,7 @@ export default function App() {
                 javaScriptEnabled
                 domStorageEnabled
                 allowsBackForwardNavigationGestures
+                pullToRefreshEnabled
                 decelerationRate="normal"
                 contentInsetAdjustmentBehavior="automatic"
                 overScrollMode="always"
