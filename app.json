@@ -1,0 +1,55 @@
+{
+  "expo": {
+    "name": "Zeed Mobile",
+    "slug": "zeed-mobile",
+    "version": "0.1.0",
+    "orientation": "portrait",
+    "icon": "./assets/icon.png",
+    "userInterfaceStyle": "dark",
+    "splash": {
+      "image": "./assets/splash.png",
+      "resizeMode": "contain",
+      "backgroundColor": "#0f0f12"
+    },
+    "assetBundlePatterns": ["**/*"],
+    "ios": {
+      "supportsTablet": true,
+      "bundleIdentifier": "com.efgtechnologies.zeedmobile",
+      "buildNumber": "1",
+      "entitlements": {
+        "com.apple.developer.web-browser": true
+      },
+      "infoPlist": {
+        "NSCameraUsageDescription": "not used",
+        "NSLocationWhenInUseUsageDescription": "not used",
+        "CFBundleURLTypes": [
+          {
+            "CFBundleURLName": "com.efgtechnologies.zeedmobile.web",
+            "CFBundleURLSchemes": ["http", "https"]
+          }
+        ],
+        "LSApplicationQueriesSchemes": ["http", "https"]
+      }
+    },
+    "android": {
+      "package": "com.efgtechnologies.zeedmobile",
+      "versionCode": 1,
+      "intentFilters": [
+        {
+          "action": "VIEW",
+          "autoVerify": true,
+          "data": [
+            { "scheme": "http" },
+            { "scheme": "https" }
+          ],
+          "category": ["BROWSABLE", "DEFAULT"]
+        }
+      ]
+    },
+    "extra": {
+      "eas": {
+        "projectId": ""
+      }
+    }
+  }
+}
