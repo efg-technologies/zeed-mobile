@@ -48,8 +48,9 @@ export function buildStartPageHtml(opts: {
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title>New Tab</title>
 <style>
-  :root { color-scheme: dark; }
-  html, body { margin:0; padding:0; background:#0F0F12; color:#ddd;
+  :root { color-scheme: dark; background:#0F0F12; }
+  html, body { margin:0; padding:0; min-height:100%; background:#0F0F12;
+    color:#ddd; overscroll-behavior: none;
     font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
     -webkit-font-smoothing: antialiased; }
   main { max-width: 720px; margin: 0 auto;

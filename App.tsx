@@ -853,7 +853,13 @@ function AppBody() {
                 // the default WebView fallback. applicationNameForUserAgent
                 // is appended to the WKWebView default UA on iOS.
                 applicationNameForUserAgent="Version/17.0 Mobile/15E148 Safari/604.1"
-                pullToRefreshEnabled
+                // Dark scroll background so overscroll / bounce never
+                // flashes the default WKWebView white.
+                style={{ backgroundColor: '#0F0F12' }}
+                containerStyle={{ backgroundColor: '#0F0F12' }}
+                // Disable pull-to-refresh on the synthetic Start Page
+                // (reloading about:blank HTML shows the error page).
+                pullToRefreshEnabled={t.url !== NEW_TAB_URL}
                 decelerationRate="normal"
                 contentInsetAdjustmentBehavior="automatic"
                 overScrollMode="always"
