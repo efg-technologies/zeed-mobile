@@ -5,7 +5,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import {
-  ActivityIndicator, Alert, Image, KeyboardAvoidingView, Modal, Platform, Pressable,
+  Alert, Image, KeyboardAvoidingView, Modal, Platform, Pressable,
   SafeAreaView, ScrollView, StyleSheet, Switch, Text, TextInput, View,
 } from 'react-native';
 import { WebView, type WebViewMessageEvent, type WebViewNavigation } from 'react-native-webview';
@@ -23,6 +23,14 @@ function faviconFor(u: string): string | null {
     return `https://www.google.com/s2/favicons?sz=64&domain=${host}`;
   } catch {
     return null;
+  }
+}
+
+function hostnameOf(u: string): string {
+  try {
+    return new URL(u).hostname || u;
+  } catch {
+    return u;
   }
 }
 import { chat } from './src/llm/openrouter.ts';
@@ -48,6 +56,10 @@ import {
 } from './src/storage/settings.ts';
 import { rankSuggestions, type Suggestion } from './src/search/rank.ts';
 import { fetchGoogleSuggestions } from './src/search/google.ts';
+import {
+  logger, getLogs, clearLogs, subscribe as subscribeLogs, withTimeout,
+  type LogEntry,
+} from './src/debug/log.ts';
 
 const secureStoreBackend: SecureBackend = {
   getItemAsync: (k) => SecureStore.getItemAsync(k),
@@ -87,10 +99,24 @@ export default function App() {
 
   const active: Tab = tabs.find((t) => t.id === activeId) ?? tabs[0]!;
   const [urlInput, setUrlInput] = useState(active.url);
-  const [chatInput, setChatInput] = useState('');
   const [messages, setMessages] = useState<Msg[]>([]);
-  const [sheetOpen, setSheetOpen] = useState(true);
+  const [chatPanelOpen, setChatPanelOpen] = useState(false);
   const [busy, setBusy] = useState(false);
+  const [lastStep, setLastStep] = useState<string | null>(null);
+  const [dots, setDots] = useState('');
+  const [logsOpen, setLogsOpen] = useState(false);
+
+  useEffect(() => {
+    if (!busy) { setDots(''); return; }
+    const frames = ['.', '..', '...', ''];
+    let i = 0;
+    setDots(frames[0]!);
+    const id = setInterval(() => {
+      i = (i + 1) % frames.length;
+      setDots(frames[i]!);
+    }, 350);
+    return () => clearInterval(id);
+  }, [busy]);
   const [bookmarks, setBookmarks] = useState<Bookmark[]>([]);
   const [likes, setLikes] = useState<Like[]>([]);
   const [history, setHistory] = useState<HistoryEntry[]>([]);
@@ -164,9 +190,16 @@ export default function App() {
   }, [activeId, updateTab]);
 
   const observe = useCallback((): Promise<PageObservation> => {
-    return new Promise((resolve) => {
-      pendingObs.current = resolve;
-      webviewRefs.current[activeId]?.injectJavaScript(buildReadPageJs(false));
+    const p = new Promise<PageObservation>((resolve, reject) => {
+      const wv = webviewRefs.current[activeId];
+      if (!wv) { reject(new Error('no active webview')); return; }
+      pendingObs.current = (o) => { resolve(o); };
+      logger.debug(`observe → inject read_page (tab ${activeId})`);
+      wv.injectJavaScript(buildReadPageJs(false));
+    });
+    return withTimeout(p, 8000, 'observe').catch((e) => {
+      pendingObs.current = null;
+      throw e;
     });
   }, [activeId]);
 
@@ -199,6 +232,10 @@ export default function App() {
     try {
       const data = JSON.parse(e.nativeEvent.data);
       if (data.type === 'read_page' && pendingObs.current) {
+        logger.debug(
+          `observe ← read_page (title="${(data.title || '').slice(0, 40)}" `
+          + `interactives=${Array.isArray(data.interactives) ? data.interactives.length : 0})`,
+        );
         pendingObs.current({
           url: data.url ?? active.url,
           title: data.title ?? '',
@@ -230,45 +267,75 @@ export default function App() {
     }
   }, [activeId, urlFocused, updateTab]);
 
-  const runTask = useCallback(async () => {
-    const goal = chatInput.trim();
+  const runTaskWith = useCallback(async (goalRaw: string) => {
+    const goal = goalRaw.trim();
     if (!goal || busy) return;
-    setChatInput('');
     setMessages((m) => [...m, { role: 'user', content: goal }]);
+    logger.info(`agent start: "${goal.slice(0, 80)}"`);
     const apiKey = await getSecret(KEYS.openrouterApiKey);
     if (!apiKey) {
+      logger.warn('agent: no OpenRouter key set');
       setMessages((m) => [...m, {
         role: 'assistant',
-        content: 'Set your OpenRouter API key first (tap settings).',
+        content: 'Set your OpenRouter API key first (tap Menu → OpenRouter).',
       }]);
       return;
     }
     setBusy(true);
+    setLastStep('thinking');
     try {
       const result = await runAgent(goal, {
         observe,
         act,
         reason: async (msgs) => {
-          const r = await chat(apiKey, msgs);
-          return { response: r.response, error: r.error };
+          const ctrl = new AbortController();
+          const to = setTimeout(() => ctrl.abort(), 30000);
+          logger.debug(`chat → openrouter (${msgs.length} msgs)`);
+          try {
+            const r = await chat(apiKey, msgs, { signal: ctrl.signal });
+            if (r.error) logger.warn(`chat error: ${r.error}`);
+            else logger.debug(`chat ← ${r.response.slice(0, 80)}`);
+            return { response: r.response, error: r.error };
+          } catch (e) {
+            const msg = e instanceof Error ? e.message : String(e);
+            logger.error(`chat threw: ${msg}`);
+            return { response: '', error: `chat failed: ${msg}` };
+          } finally { clearTimeout(to); }
         },
         onStep: (s) => {
-          setMessages((m) => [...m, {
-            role: 'system',
-            content: `step ${s.index}: ${s.action.tool}${s.action.label ? ` "${s.action.label}"` : ''}`,
-          }]);
+          const line = `step ${s.index}: ${s.action.tool}`
+            + (s.action.label ? ` "${s.action.label}"` : '')
+            + (s.action.url ? ` ${s.action.url}` : '');
+          logger.info(line);
+          setLastStep(line);
+          setMessages((m) => [...m, { role: 'system', content: line }]);
         },
       });
+      logger.info(`agent end: ok=${result.ok} ${result.error ?? ''}`);
       setMessages((m) => [...m, {
         role: 'assistant',
         content: result.ok
           ? (result.summary || 'done')
           : `stopped: ${result.error}${result.suggestAutopilot ? ' — try Autopilot?' : ''}`,
       }]);
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e);
+      logger.error(`agent threw: ${msg}`);
+      setMessages((m) => [...m, { role: 'assistant', content: `error: ${msg}` }]);
     } finally {
       setBusy(false);
+      setLastStep(null);
     }
-  }, [chatInput, busy, observe, act]);
+  }, [busy, observe, act]);
+
+  const runAskFromOmnibox = useCallback(async () => {
+    const goal = urlInput.trim();
+    if (!goal) return;
+    setUrlInput('');
+    setUrlFocused(false);
+    setChatPanelOpen(true);
+    await runTaskWith(goal);
+  }, [urlInput, runTaskWith]);
 
   const onUrlSubmit = useCallback(() => {
     const normalized = normalizeUrlOrSearch(urlInput);
@@ -350,17 +417,6 @@ export default function App() {
     delete webviewRefs.current[id];
   }, [activeId]);
 
-  const saveApiKey = useCallback(async () => {
-    const k = chatInput.trim();
-    if (!k.startsWith('sk-')) {
-      setMessages((m) => [...m, { role: 'assistant', content: 'Key must start with sk-' }]);
-      return;
-    }
-    await setSecret(KEYS.openrouterApiKey, k);
-    setChatInput('');
-    setMessages((m) => [...m, { role: 'assistant', content: 'API key saved to Keychain.' }]);
-  }, [chatInput]);
-
   const chatRendered = useMemo(() => messages.map((m, i) => (
     <View key={i} style={[styles.msg, m.role === 'user' ? styles.msgUser : m.role === 'system' ? styles.msgSystem : styles.msgBot]}>
       <Text style={styles.msgText}>{m.content}</Text>
@@ -383,19 +439,11 @@ export default function App() {
           <Pressable onPress={reload} style={styles.navBtn}>
             <Text style={styles.navBtnText}>↻</Text>
           </Pressable>
-          <TextInput
-            style={styles.urlInput}
-            value={urlInput}
-            onChangeText={setUrlInput}
-            onSubmitEditing={onUrlSubmit}
-            onFocus={() => setUrlFocused(true)}
-            onBlur={() => setUrlFocused(false)}
-            autoCapitalize="none"
-            autoCorrect={false}
-            placeholder="search or enter URL"
-            placeholderTextColor="#666"
-            selectTextOnFocus
-          />
+          <View style={styles.topBarTitleWrap}>
+            <Text style={styles.topBarTitle} numberOfLines={1}>
+              {active.title && active.title !== active.url ? active.title : hostnameOf(active.url)}
+            </Text>
+          </View>
           <Pressable
             onPress={toggleCurrentBookmark}
             onLongPress={() => setActionMenuOpen(true)}
@@ -410,15 +458,132 @@ export default function App() {
             <Text style={styles.tabPillText}>{tabs.length}</Text>
           </Pressable>
           <Pressable onPress={openNewTab} style={styles.navBtn}>
-            <Text style={styles.navBtnText}>＋</Text>
+            <Text style={styles.navBtnText}>+</Text>
           </Pressable>
           <Pressable onPress={() => setSettingsOpen(true)} style={styles.navBtn}>
-            <Text style={styles.navBtnText}>⚙</Text>
+            <Text style={styles.navBtnTextSmall}>•••</Text>
           </Pressable>
         </View>
         {active.loading && (
-          <View style={styles.progressBar}>
-            <ActivityIndicator size="small" color="#5B21B6" />
+          <View style={styles.progressBar} />
+        )}
+        <View style={styles.webWrap}>
+          {tabs.map((t) => (
+            <View
+              key={t.id}
+              style={[styles.webLayer, t.id === activeId ? styles.webLayerActive : styles.webLayerHidden]}
+              pointerEvents={t.id === activeId ? 'auto' : 'none'}
+            >
+              <WebView
+                ref={(r) => { webviewRefs.current[t.id] = r; }}
+                source={{ uri: t.url }}
+                onMessage={onWebViewMessage}
+                onNavigationStateChange={(s) => onNavStateChange(t.id, s)}
+                onLoadStart={() => updateTab(t.id, { loading: true })}
+                onLoadEnd={() => updateTab(t.id, { loading: false })}
+                originWhitelist={['*']}
+                javaScriptEnabled
+                domStorageEnabled
+                allowsBackForwardNavigationGestures
+                decelerationRate="normal"
+                contentInsetAdjustmentBehavior="automatic"
+                overScrollMode="always"
+                nestedScrollEnabled
+              />
+            </View>
+          ))}
+        </View>
+        {tabListOpen && (
+          <ScrollView style={styles.tabList} contentContainerStyle={styles.tabListContent}>
+            <Text style={styles.tabListHeader}>Tabs</Text>
+            {tabs.map((t) => {
+              const favicon = faviconFor(t.url);
+              return (
+                <Pressable
+                  key={t.id}
+                  onPress={() => switchTab(t.id)}
+                  style={[styles.tabCard, t.id === activeId && styles.tabCardActive]}
+                >
+                  <View style={styles.tabCardThumb}>
+                    {favicon ? (
+                      <Image source={{ uri: favicon }} style={styles.tabCardFavicon} />
+                    ) : (
+                      <Text style={styles.tabCardThumbPlaceholder}>?</Text>
+                    )}
+                  </View>
+                  <View style={styles.tabCardBody}>
+                    <Text style={styles.tabCardTitle} numberOfLines={1}>
+                      {t.title || t.url}
+                    </Text>
+                    <Text style={styles.tabCardUrl} numberOfLines={1}>{t.url}</Text>
+                  </View>
+                  <Pressable onPress={() => closeTab(t.id)} style={styles.tabClose} hitSlop={8}>
+                    <Text style={styles.tabCloseText}>×</Text>
+                  </Pressable>
+                </Pressable>
+              );
+            })}
+            {bookmarks.length > 0 && (
+              <Text style={styles.tabListHeader}>Bookmarks</Text>
+            )}
+            {bookmarks.map((b) => {
+              const favicon = faviconFor(b.url);
+              return (
+                <Pressable
+                  key={`bm:${b.url}`}
+                  onPress={() => openBookmark(b)}
+                  style={styles.tabCard}
+                >
+                  <View style={styles.tabCardThumb}>
+                    {favicon ? (
+                      <Image source={{ uri: favicon }} style={styles.tabCardFavicon} />
+                    ) : (
+                      <Text style={styles.tabCardThumbPlaceholder}>★</Text>
+                    )}
+                  </View>
+                  <View style={styles.tabCardBody}>
+                    <Text style={styles.tabCardTitle} numberOfLines={1}>{b.title}</Text>
+                    <Text style={styles.tabCardUrl} numberOfLines={1}>{b.url}</Text>
+                  </View>
+                  <Pressable
+                    onPress={() => removeBookmarkAt(b.url)}
+                    style={styles.tabClose}
+                    hitSlop={8}
+                  >
+                    <Text style={styles.tabCloseText}>×</Text>
+                  </Pressable>
+                </Pressable>
+              );
+            })}
+          </ScrollView>
+        )}
+        {messages.length > 0 && chatPanelOpen && (
+          <View style={styles.chatPanel}>
+            <View style={styles.chatPanelHeader}>
+              <Text style={styles.chatPanelTitle}>Zeed</Text>
+              <Pressable onPress={() => setChatPanelOpen(false)} hitSlop={8}>
+                <Text style={styles.chatPanelToggle}>hide</Text>
+              </Pressable>
+            </View>
+            <ScrollView style={styles.chatScroll}>{chatRendered}</ScrollView>
+          </View>
+        )}
+        {messages.length > 0 && !chatPanelOpen && (
+          <Pressable
+            onPress={() => setChatPanelOpen(true)}
+            style={styles.chatReopen}
+          >
+            <Text style={styles.chatReopenText}>
+              {messages.length} message{messages.length === 1 ? '' : 's'} · show
+            </Text>
+          </Pressable>
+        )}
+        {busy && (
+          <View style={styles.statusBar}>
+            <Text style={styles.statusDots}>{dots || '.'}</Text>
+            <Text style={styles.statusText} numberOfLines={1}>
+              {lastStep ?? 'thinking'}
+            </Text>
           </View>
         )}
         {suggestions.length > 0 && (
@@ -453,122 +618,31 @@ export default function App() {
             })}
           </ScrollView>
         )}
-        {tabListOpen && (
-          <ScrollView style={styles.tabList} contentContainerStyle={styles.tabListContent}>
-            <Text style={styles.tabListHeader}>Tabs</Text>
-            {tabs.map((t) => {
-              const favicon = faviconFor(t.url);
-              return (
-                <Pressable
-                  key={t.id}
-                  onPress={() => switchTab(t.id)}
-                  style={[styles.tabCard, t.id === activeId && styles.tabCardActive]}
-                >
-                  <View style={styles.tabCardThumb}>
-                    {favicon ? (
-                      <Image source={{ uri: favicon }} style={styles.tabCardFavicon} />
-                    ) : (
-                      <Text style={styles.tabCardThumbPlaceholder}>?</Text>
-                    )}
-                  </View>
-                  <View style={styles.tabCardBody}>
-                    <Text style={styles.tabCardTitle} numberOfLines={1}>
-                      {t.title || t.url}
-                    </Text>
-                    <Text style={styles.tabCardUrl} numberOfLines={1}>{t.url}</Text>
-                  </View>
-                  <Pressable onPress={() => closeTab(t.id)} style={styles.tabClose} hitSlop={8}>
-                    <Text style={styles.tabCloseText}>✕</Text>
-                  </Pressable>
-                </Pressable>
-              );
-            })}
-            {bookmarks.length > 0 && (
-              <Text style={styles.tabListHeader}>Bookmarks</Text>
-            )}
-            {bookmarks.map((b) => {
-              const favicon = faviconFor(b.url);
-              return (
-                <Pressable
-                  key={`bm:${b.url}`}
-                  onPress={() => openBookmark(b)}
-                  style={styles.tabCard}
-                >
-                  <View style={styles.tabCardThumb}>
-                    {favicon ? (
-                      <Image source={{ uri: favicon }} style={styles.tabCardFavicon} />
-                    ) : (
-                      <Text style={styles.tabCardThumbPlaceholder}>★</Text>
-                    )}
-                  </View>
-                  <View style={styles.tabCardBody}>
-                    <Text style={styles.tabCardTitle} numberOfLines={1}>{b.title}</Text>
-                    <Text style={styles.tabCardUrl} numberOfLines={1}>{b.url}</Text>
-                  </View>
-                  <Pressable
-                    onPress={() => removeBookmarkAt(b.url)}
-                    style={styles.tabClose}
-                    hitSlop={8}
-                  >
-                    <Text style={styles.tabCloseText}>✕</Text>
-                  </Pressable>
-                </Pressable>
-              );
-            })}
-          </ScrollView>
-        )}
-        <View style={styles.webWrap}>
-          {tabs.map((t) => (
-            <View
-              key={t.id}
-              style={[styles.webLayer, t.id === activeId ? styles.webLayerActive : styles.webLayerHidden]}
-              pointerEvents={t.id === activeId ? 'auto' : 'none'}
-            >
-              <WebView
-                ref={(r) => { webviewRefs.current[t.id] = r; }}
-                source={{ uri: t.url }}
-                onMessage={onWebViewMessage}
-                onNavigationStateChange={(s) => onNavStateChange(t.id, s)}
-                onLoadStart={() => updateTab(t.id, { loading: true })}
-                onLoadEnd={() => updateTab(t.id, { loading: false })}
-                originWhitelist={['*']}
-                javaScriptEnabled
-                domStorageEnabled
-                allowsBackForwardNavigationGestures
-                decelerationRate="normal"
-                contentInsetAdjustmentBehavior="automatic"
-                overScrollMode="always"
-                nestedScrollEnabled
-              />
-            </View>
-          ))}
-        </View>
-        <View style={sheetOpen ? styles.sheetOpen : styles.sheetClosed}>
-          <Pressable onPress={() => setSheetOpen((s) => !s)} style={styles.sheetHandle}>
-            <Text style={styles.sheetHandleText}>{sheetOpen ? '▼' : '▲'} Zeed</Text>
+        <View style={styles.omnibox}>
+          <TextInput
+            style={styles.omniInput}
+            value={urlInput}
+            onChangeText={setUrlInput}
+            onSubmitEditing={onUrlSubmit}
+            onFocus={() => setUrlFocused(true)}
+            onBlur={() => setUrlFocused(false)}
+            autoCapitalize="none"
+            autoCorrect={false}
+            placeholder="Search, URL, or ask Zeed"
+            placeholderTextColor="#666"
+            selectTextOnFocus
+            returnKeyType="go"
+          />
+          <Pressable onPress={onUrlSubmit} style={styles.omniBtnGhost}>
+            <Text style={styles.omniBtnGhostText}>Go</Text>
           </Pressable>
-          {sheetOpen && (
-            <>
-              <ScrollView style={styles.chatScroll}>{chatRendered}</ScrollView>
-              <View style={styles.chatRow}>
-                <TextInput
-                  style={styles.chatInput}
-                  value={chatInput}
-                  onChangeText={setChatInput}
-                  placeholder={busy ? 'running…' : 'ask Zeed or paste sk-or- key'}
-                  placeholderTextColor="#666"
-                  editable={!busy}
-                />
-                <Pressable
-                  onPress={chatInput.startsWith('sk-') ? saveApiKey : runTask}
-                  disabled={busy}
-                  style={styles.sendBtn}
-                >
-                  <Text style={styles.sendBtnText}>{busy ? '…' : '↑'}</Text>
-                </Pressable>
-              </View>
-            </>
-          )}
+          <Pressable
+            onPress={runAskFromOmnibox}
+            disabled={busy || !urlInput.trim()}
+            style={[styles.omniBtn, (busy || !urlInput.trim()) && styles.omniBtnDisabled]}
+          >
+            <Text style={styles.omniBtnText}>{busy ? `Ask ${dots}` : 'Ask'}</Text>
+          </Pressable>
         </View>
       </KeyboardAvoidingView>
 
@@ -580,7 +654,9 @@ export default function App() {
         onClearHistory={clearHistoryAction}
         onClearBookmarks={clearBookmarksAction}
         onClearLikes={clearLikesAction}
+        onOpenLogs={() => { setSettingsOpen(false); setLogsOpen(true); }}
       />
+      <LogsModal visible={logsOpen} onClose={() => setLogsOpen(false)} />
 
       <ActionMenuModal
         visible={actionMenuOpen}
@@ -600,9 +676,9 @@ export default function App() {
 
 const SOURCE_ICON: Record<Suggestion['source'], string> = {
   direct: '→',
-  bookmark: '★',
-  like: '❤',
-  history: '⏱',
+  bookmark: 'B',
+  like: 'L',
+  history: 'H',
   google: 'G',
 };
 
@@ -614,6 +690,7 @@ function SettingsModal(props: {
   onClearHistory: () => void;
   onClearBookmarks: () => void;
   onClearLikes: () => void;
+  onOpenLogs: () => void;
 }) {
   const [apiKeyInput, setApiKeyInput] = useState('');
   const [hasStoredKey, setHasStoredKey] = useState(false);
@@ -730,6 +807,13 @@ function SettingsModal(props: {
             </Pressable>
           </View>
 
+          <Text style={styles.modalSectionHeader}>Debug</Text>
+          <View style={styles.modalCard}>
+            <Pressable onPress={props.onOpenLogs} style={styles.modalBtnRow}>
+              <Text style={styles.modalBtnRowText}>View logs</Text>
+            </Pressable>
+          </View>
+
           <Text style={styles.modalFooter}>
             Zeed Mobile · All bookmarks / likes / history stay on this device.
           </Text>
@@ -758,23 +842,77 @@ function ActionMenuModal(props: {
       <Pressable style={styles.menuBackdrop} onPress={props.onClose}>
         <View style={styles.menuCard}>
           <Pressable onPress={props.onToggleLike} style={styles.menuRow}>
-            <Text style={styles.menuIcon}>{props.liked ? '❤' : '♡'}</Text>
             <Text style={styles.menuText}>{props.liked ? 'Unlike' : 'Like this page'}</Text>
           </Pressable>
           <Pressable onPress={props.onToggleBookmark} style={styles.menuRow}>
-            <Text style={styles.menuIcon}>{props.bookmarked ? '★' : '☆'}</Text>
             <Text style={styles.menuText}>
               {props.bookmarked ? 'Remove bookmark' : 'Add bookmark'}
             </Text>
           </Pressable>
           <Pressable onPress={props.onSubscribeRss} style={styles.menuRow}>
-            <Text style={styles.menuIcon}>📡</Text>
             <Text style={styles.menuText}>Subscribe RSS (coming soon)</Text>
           </Pressable>
         </View>
       </Pressable>
     </Modal>
   );
+}
+
+function LogsModal(props: { visible: boolean; onClose: () => void }) {
+  const [, setTick] = useState(0);
+  useEffect(() => {
+    if (!props.visible) return;
+    return subscribeLogs(() => setTick((x) => x + 1));
+  }, [props.visible]);
+  const entries: LogEntry[] = props.visible ? getLogs() : [];
+  return (
+    <Modal
+      visible={props.visible}
+      animationType="slide"
+      presentationStyle="pageSheet"
+      onRequestClose={props.onClose}
+    >
+      <SafeAreaView style={styles.modalRoot}>
+        <View style={styles.modalHeader}>
+          <Pressable onPress={clearLogs} hitSlop={8}>
+            <Text style={styles.modalCloseGhost}>Clear</Text>
+          </Pressable>
+          <Text style={styles.modalTitle}>Logs</Text>
+          <Pressable onPress={props.onClose} hitSlop={8}>
+            <Text style={styles.modalClose}>Done</Text>
+          </Pressable>
+        </View>
+        <ScrollView contentContainerStyle={styles.logBody}>
+          {entries.length === 0 ? (
+            <Text style={styles.logEmpty}>No logs yet. Try asking Zeed.</Text>
+          ) : (
+            entries.slice().reverse().map((e, i) => (
+              <View key={`${e.t}-${i}`} style={styles.logRow}>
+                <Text style={[styles.logLevel, logLevelStyle(e.level)]}>
+                  {e.level.toUpperCase()}
+                </Text>
+                <Text style={styles.logTime}>{formatTime(e.t)}</Text>
+                <Text style={styles.logMsg}>{e.msg}</Text>
+              </View>
+            ))
+          )}
+        </ScrollView>
+      </SafeAreaView>
+    </Modal>
+  );
+}
+
+function formatTime(t: number): string {
+  const d = new Date(t);
+  const pad = (n: number) => n.toString().padStart(2, '0');
+  return `${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`;
+}
+
+function logLevelStyle(level: LogEntry['level']) {
+  if (level === 'error') return { color: '#ff6b6b' };
+  if (level === 'warn') return { color: '#ffc857' };
+  if (level === 'info') return { color: '#5B21B6' };
+  return { color: '#888' };
 }
 
 const styles = StyleSheet.create({
@@ -789,8 +927,13 @@ const styles = StyleSheet.create({
     paddingHorizontal: 6,
   },
   navBtnText: { color: '#fff', fontSize: 18 },
+  navBtnTextSmall: { color: '#fff', fontSize: 14, letterSpacing: 1 },
   navBtnDisabled: { color: '#444' },
   navBtnAccent: { color: '#5B21B6' },
+  topBarTitleWrap: {
+    flex: 1, height: 32, justifyContent: 'center', paddingHorizontal: 8,
+  },
+  topBarTitle: { color: '#ccc', fontSize: 13 },
   urlInput: {
     flex: 1, color: '#fff', backgroundColor: '#0F0F12',
     borderRadius: 8, paddingHorizontal: 10, paddingVertical: 6, fontSize: 13,
@@ -855,29 +998,59 @@ const styles = StyleSheet.create({
   webLayer: { position: 'absolute', top: 0, left: 0, right: 0, bottom: 0 },
   webLayerActive: { opacity: 1 },
   webLayerHidden: { opacity: 0 },
-  sheetOpen: {
+  chatPanel: {
     backgroundColor: '#1A1A1F', borderTopWidth: 1, borderTopColor: '#2A2A30',
-    maxHeight: '45%',
+    maxHeight: 240,
   },
-  sheetClosed: { backgroundColor: '#1A1A1F' },
-  sheetHandle: { padding: 8, alignItems: 'center' },
-  sheetHandleText: { color: '#888', fontSize: 12 },
-  chatScroll: { paddingHorizontal: 12, maxHeight: 240 },
+  chatPanelHeader: {
+    flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center',
+    paddingHorizontal: 12, paddingVertical: 6,
+    borderBottomWidth: 1, borderBottomColor: '#2A2A30',
+  },
+  chatPanelTitle: { color: '#bbb', fontSize: 12, fontWeight: '600' },
+  chatPanelToggle: { color: '#5B21B6', fontSize: 12 },
+  chatReopen: {
+    backgroundColor: '#1A1A1F', borderTopWidth: 1, borderTopColor: '#2A2A30',
+    paddingVertical: 6, alignItems: 'center',
+  },
+  chatReopenText: { color: '#888', fontSize: 12 },
+  chatScroll: { paddingHorizontal: 12 },
   msg: { padding: 8, marginVertical: 4, borderRadius: 8 },
   msgUser: { backgroundColor: '#5B21B6', alignSelf: 'flex-end' },
   msgBot: { backgroundColor: '#2A2A30', alignSelf: 'flex-start' },
   msgSystem: { backgroundColor: 'transparent', alignSelf: 'center' },
   msgText: { color: '#fff', fontSize: 14 },
-  chatRow: { flexDirection: 'row', padding: 8, gap: 8 },
-  chatInput: {
+
+  statusBar: {
+    flexDirection: 'row', alignItems: 'center', gap: 8,
+    paddingHorizontal: 12, paddingVertical: 6,
+    backgroundColor: '#1A1A1F',
+    borderTopWidth: 1, borderTopColor: '#2A2A30',
+  },
+  statusDots: { color: '#5B21B6', fontSize: 16, width: 24, fontFamily: Platform.OS === 'ios' ? 'Menlo' : 'monospace' },
+  statusText: { color: '#bbb', fontSize: 12, flex: 1 },
+
+  omnibox: {
+    flexDirection: 'row', alignItems: 'center', gap: 6,
+    paddingHorizontal: 8, paddingVertical: 8,
+    backgroundColor: '#1A1A1F',
+    borderTopWidth: 1, borderTopColor: '#2A2A30',
+  },
+  omniInput: {
     flex: 1, color: '#fff', backgroundColor: '#0F0F12',
-    borderRadius: 8, paddingHorizontal: 12, paddingVertical: 8, fontSize: 14,
+    borderRadius: 10, paddingHorizontal: 14, paddingVertical: 10, fontSize: 14,
   },
-  sendBtn: {
-    backgroundColor: '#5B21B6', borderRadius: 8,
-    paddingHorizontal: 16, justifyContent: 'center',
+  omniBtnGhost: {
+    paddingHorizontal: 12, paddingVertical: 10, borderRadius: 8,
+    borderWidth: 1, borderColor: '#2A2A30',
   },
-  sendBtnText: { color: '#fff', fontSize: 18, fontWeight: '600' },
+  omniBtnGhostText: { color: '#ddd', fontSize: 13, fontWeight: '600' },
+  omniBtn: {
+    paddingHorizontal: 14, paddingVertical: 10, borderRadius: 8,
+    backgroundColor: '#5B21B6',
+  },
+  omniBtnDisabled: { backgroundColor: '#2A2A30' },
+  omniBtnText: { color: '#fff', fontSize: 13, fontWeight: '600' },
 
   modalRoot: { flex: 1, backgroundColor: '#0F0F12' },
   modalHeader: {
@@ -887,6 +1060,26 @@ const styles = StyleSheet.create({
   },
   modalTitle: { color: '#fff', fontSize: 18, fontWeight: '600' },
   modalClose: { color: '#5B21B6', fontSize: 15, fontWeight: '500' },
+  modalCloseGhost: { color: '#888', fontSize: 15 },
+
+  logBody: { padding: 16, gap: 2 },
+  logEmpty: { color: '#666', textAlign: 'center', marginTop: 40 },
+  logRow: {
+    flexDirection: 'row', alignItems: 'flex-start', gap: 6,
+    paddingVertical: 4, borderBottomWidth: 1, borderBottomColor: '#1A1A1F',
+  },
+  logLevel: {
+    fontSize: 10, fontWeight: '700', width: 42,
+    fontFamily: Platform.OS === 'ios' ? 'Menlo' : 'monospace',
+  },
+  logTime: {
+    fontSize: 10, color: '#666', width: 60,
+    fontFamily: Platform.OS === 'ios' ? 'Menlo' : 'monospace',
+  },
+  logMsg: {
+    flex: 1, color: '#ddd', fontSize: 11,
+    fontFamily: Platform.OS === 'ios' ? 'Menlo' : 'monospace',
+  },
   modalBody: { padding: 16, gap: 12 },
   modalSectionHeader: {
     color: '#888', fontSize: 11, fontWeight: '700',
@@ -930,9 +1123,8 @@ const styles = StyleSheet.create({
     borderWidth: 1, borderColor: '#2A2A30',
   },
   menuRow: {
-    flexDirection: 'row', alignItems: 'center', gap: 14,
+    flexDirection: 'row', alignItems: 'center',
     paddingHorizontal: 16, paddingVertical: 14,
   },
-  menuIcon: { fontSize: 20, width: 28, textAlign: 'center' },
   menuText: { color: '#fff', fontSize: 15 },
 });
