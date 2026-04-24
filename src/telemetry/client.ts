@@ -22,7 +22,9 @@ export interface TelemetryDeps {
   kv: KvBackend;
   fetch: typeof fetch;
   now: () => number;
-  randomHex: (bytes: number) => string;
+  /** Must return a UUID-v4 string — worker's isValidInstallId regex is
+   * strict: /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i */
+  newInstallId: () => string;
   version: string;   // digits + dots only (e.g. '0.1.0') — worker validates
   os: 'ios' | 'mac' | 'linux' | 'unknown';
   /** Tier A toggle. Default ON (matches browser). */
@@ -45,12 +47,16 @@ export function dateStringFor(ts: number): string {
   return `${d.getUTCFullYear()}-${pad(d.getUTCMonth() + 1)}-${pad(d.getUTCDate())}`;
 }
 
+/** Worker's accepted format — UUID v4. */
+const INSTALL_ID_RE =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+
 export async function getOrCreateInstallId(
-  kv: KvBackend, randomHex: (n: number) => string,
+  kv: KvBackend, newInstallId: () => string,
 ): Promise<string> {
   const existing = await kv.getItem(K_INSTALL_ID);
-  if (existing && /^[a-f0-9]{16,64}$/i.test(existing)) return existing;
-  const fresh = randomHex(16);
+  if (existing && INSTALL_ID_RE.test(existing)) return existing;
+  const fresh = newInstallId();
   await kv.setItem(K_INSTALL_ID, fresh);
   return fresh;
 }
@@ -88,7 +94,7 @@ async function post(
 export async function sendInstallOnce(deps: TelemetryDeps): Promise<void> {
   const already = await deps.kv.getItem(K_INSTALL_SENT);
   if (already === '1') return;
-  const installId = await getOrCreateInstallId(deps.kv, deps.randomHex);
+  const installId = await getOrCreateInstallId(deps.kv, deps.newInstallId);
   await post(deps, {
     event: 'install',
     install_id: installId,
@@ -99,7 +105,7 @@ export async function sendInstallOnce(deps: TelemetryDeps): Promise<void> {
 }
 
 export async function sendSessionStart(deps: TelemetryDeps): Promise<void> {
-  const installId = await getOrCreateInstallId(deps.kv, deps.randomHex);
+  const installId = await getOrCreateInstallId(deps.kv, deps.newInstallId);
   await post(deps, {
     event: 'session_start',
     install_id: installId,
@@ -111,7 +117,7 @@ export async function sendHeartbeatIfNewDay(deps: TelemetryDeps): Promise<void> 
   const today = dateStringFor(deps.now());
   const last = await deps.kv.getItem(K_LAST_HEARTBEAT);
   if (last === today) return;
-  const installId = await getOrCreateInstallId(deps.kv, deps.randomHex);
+  const installId = await getOrCreateInstallId(deps.kv, deps.newInstallId);
   await post(deps, {
     event: 'heartbeat',
     install_id: installId,

@@ -31,7 +31,7 @@ function makeDeps(overrides: Partial<TelemetryDeps> = {}): {
     kv: memKv(),
     fetch: fakeFetch,
     now: () => 1_700_000_000_000,
-    randomHex: (n) => 'a'.repeat(n * 2),
+    newInstallId: () => 'aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee',
     version: '0.1.0',
     os: 'ios',
     tierAEnabled: () => true,
@@ -46,16 +46,18 @@ test('dateStringFor: zero-pads months and days', () => {
 
 test('getOrCreateInstallId: generates once and persists', async () => {
   const kv = memKv();
-  const a = await getOrCreateInstallId(kv, () => 'deadbeefcafef00d');
+  const gen = () => '11111111-2222-4333-8444-555555555555';
+  const a = await getOrCreateInstallId(kv, gen);
   const b = await getOrCreateInstallId(kv, () => 'shouldnotbeused');
-  assert.equal(a, 'deadbeefcafef00d');
-  assert.equal(b, 'deadbeefcafef00d');
+  assert.equal(a, '11111111-2222-4333-8444-555555555555');
+  assert.equal(b, '11111111-2222-4333-8444-555555555555');
 });
 
-test('getOrCreateInstallId: rejects malformed stored id and regenerates', async () => {
-  const kv = memKv({ 'zeed.telemetry.install_id': 'not hex!' });
-  const id = await getOrCreateInstallId(kv, (n) => 'f'.repeat(n * 2));
-  assert.match(id, /^f+$/);
+test('getOrCreateInstallId: rejects non-UUIDv4 stored id and regenerates', async () => {
+  const kv = memKv({ 'zeed.telemetry.install_id': 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa' });
+  const fresh = '22222222-3333-4444-9555-666666666666';
+  const id = await getOrCreateInstallId(kv, () => fresh);
+  assert.equal(id, fresh);
 });
 
 test('sendInstallOnce: posts exactly once', async () => {

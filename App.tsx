@@ -39,14 +39,19 @@ function hostnameOf(u: string): string {
   }
 }
 
-// 16-byte hex id using Math.random. Anonymous aggregate id; collision risk is
-// cosmetic in the scale we care about (< 1M installs).
-function randomHex(bytes: number): string {
-  let out = '';
-  for (let i = 0; i < bytes; i++) {
-    out += Math.floor(Math.random() * 256).toString(16).padStart(2, '0');
-  }
-  return out;
+// UUID v4 using Math.random. Shape matches the telemetry worker's
+// isValidInstallId regex; collision risk is cosmetic for an anonymous
+// aggregate id at our scale (< 1M installs).
+function uuidV4(): string {
+  const h = (n: number) => {
+    let s = '';
+    for (let i = 0; i < n; i++) {
+      s += Math.floor(Math.random() * 16).toString(16);
+    }
+    return s;
+  };
+  const y = '89ab'[Math.floor(Math.random() * 4)];
+  return `${h(8)}-${h(4)}-4${h(3)}-${y}${h(3)}-${h(12)}`;
 }
 
 // Worker validates version as /^[0-9]+\.[0-9.]+$/, so no platform prefix.
@@ -201,7 +206,7 @@ function AppBody() {
     kv: AsyncStorage,
     fetch,
     now: Date.now,
-    randomHex,
+    newInstallId: uuidV4,
     version: APP_VERSION,
     // Worker currently accepts ios|mac|linux|unknown. Android reports
     // 'unknown' until the worker schema is extended.
