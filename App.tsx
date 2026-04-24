@@ -403,21 +403,44 @@ function AppBody() {
         observe,
         act,
         reason: async (msgs) => {
-          const ctrl = new AbortController();
-          // 60s: long tasks on large pages (Amazon SERPs etc.) can push the
-          // per-call LLM latency past 30s. Shorter values aborted real work.
-          const to = setTimeout(() => ctrl.abort(), 60000);
-          logger.debug(`chat → openrouter (${msgs.length} msgs)`);
-          try {
-            const r = await chat(apiKey, msgs, { signal: ctrl.signal });
-            if (r.error) logger.warn(`chat error: ${r.error}`);
-            else logger.debug(`chat ← ${r.response.slice(0, 80)}`);
-            return { response: r.response, error: r.error };
-          } catch (e) {
-            const msg = e instanceof Error ? e.message : String(e);
-            logger.error(`chat threw: ${msg}`);
-            return { response: '', error: `chat failed: ${msg}` };
-          } finally { clearTimeout(to); }
+          // Keep the system prompt + goal + last 6 turns so context stays
+          // bounded. 13+ accumulated messages at 4 KB each were tripping
+          // OpenRouter / RN fetch with 'Network request failed'.
+          const trimmed = msgs.length > 8
+            ? [msgs[0]!, msgs[1]!, ...msgs.slice(-6)]
+            : msgs;
+          // Single retry on transient network errors — RN 'Network request
+          // failed' is often a one-off DNS / TLS hiccup.
+          for (let attempt = 1; attempt <= 2; attempt++) {
+            const ctrl = new AbortController();
+            const to = setTimeout(() => ctrl.abort(), 60000);
+            logger.debug(`chat → openrouter (${trimmed.length} msgs, try ${attempt}/2)`);
+            try {
+              const r = await chat(apiKey, trimmed, { signal: ctrl.signal });
+              if (r.error) {
+                const transient = /network|timeout|fetch/i.test(r.error);
+                if (transient && attempt === 1) {
+                  logger.warn(`chat transient error (retry): ${r.error}`);
+                  await new Promise((res) => setTimeout(res, 1000));
+                  continue;
+                }
+                logger.warn(`chat error: ${r.error}`);
+                return { response: r.response, error: r.error };
+              }
+              logger.debug(`chat ← ${r.response.slice(0, 80)}`);
+              return { response: r.response, error: null };
+            } catch (e) {
+              const msg = e instanceof Error ? e.message : String(e);
+              if (attempt === 1) {
+                logger.warn(`chat threw (retry): ${msg}`);
+                await new Promise((res) => setTimeout(res, 1000));
+                continue;
+              }
+              logger.error(`chat threw: ${msg}`);
+              return { response: '', error: `chat failed: ${msg}` };
+            } finally { clearTimeout(to); }
+          }
+          return { response: '', error: 'chat failed: all retries exhausted' };
         },
         onStep: (s) => {
           const line = `step ${s.index}: ${s.action.tool}`
