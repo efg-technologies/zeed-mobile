@@ -1,0 +1,55 @@
+{
+  "$schema": "https://docs.renovatebot.com/renovate-schema.json",
+  "extends": [
+    "config:recommended",
+    ":timezone(Asia/Tokyo)",
+    ":semanticCommits",
+    ":dependencyDashboard"
+  ],
+  "labels": ["deps"],
+  "prHourlyLimit": 4,
+  "prConcurrentLimit": 10,
+  "rangeStrategy": "bump",
+  "lockFileMaintenance": {
+    "enabled": true,
+    "schedule": ["before 6am on monday"],
+    "automerge": true
+  },
+  "packageRules": [
+    {
+      "description": "Automerge devDeps patch + minor",
+      "matchDepTypes": ["devDependencies"],
+      "matchUpdateTypes": ["patch", "minor"],
+      "automerge": true,
+      "automergeType": "pr",
+      "platformAutomerge": true
+    },
+    {
+      "description": "Automerge runtime patch only (minor requires review)",
+      "matchDepTypes": ["dependencies"],
+      "matchUpdateTypes": ["patch"],
+      "automerge": true,
+      "automergeType": "pr",
+      "platformAutomerge": true
+    },
+    {
+      "description": "React Native + Expo SDK bumps need manual review (binary ABI risk)",
+      "matchPackageNames": [
+        "expo", "react", "react-native", "react-native-webview",
+        "react-native-reanimated", "react-native-gesture-handler",
+        "react-native-safe-area-context"
+      ],
+      "automerge": false,
+      "schedule": ["before 6am on monday"]
+    },
+    {
+      "description": "Group Expo SDK packages",
+      "matchPackageNames": ["/^expo-/", "expo"],
+      "groupName": "expo SDK"
+    }
+  ],
+  "vulnerabilityAlerts": {
+    "enabled": true,
+    "labels": ["security"]
+  }
+}
