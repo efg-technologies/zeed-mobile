@@ -16,12 +16,15 @@
       "supportsTablet": true,
       "bundleIdentifier": "com.efgtechnologies.zeedmobile",
       "buildNumber": "1",
-      "entitlements": {
-        "com.apple.developer.web-browser": true
+      "config": {
+        "usesNonExemptEncryption": false
       },
       "infoPlist": {
-        "NSCameraUsageDescription": "not used",
-        "NSLocationWhenInUseUsageDescription": "not used",
+        "ITSAppUsesNonExemptEncryption": false,
+        "NSCameraUsageDescription": "Some web pages may ask to use the camera (e.g. WebRTC video calls). Zeed forwards the request to iOS without retaining any data.",
+        "NSMicrophoneUsageDescription": "Some web pages may ask to use the microphone (e.g. WebRTC video calls). Zeed forwards the request to iOS without retaining any data.",
+        "NSLocationWhenInUseUsageDescription": "Some web pages may ask for location (e.g. maps). Zeed forwards the request to iOS without retaining any data.",
+        "NSPhotoLibraryUsageDescription": "Some web pages may ask to attach photos in upload forms. Zeed forwards the request to iOS without retaining any data.",
         "CFBundleURLTypes": [
           {
             "CFBundleURLName": "com.efgtechnologies.zeedmobile.web",
@@ -29,11 +32,16 @@
           }
         ],
         "LSApplicationQueriesSchemes": ["http", "https"]
-      }
+      },
+      "associatedDomains": ["applinks:zeed.run"]
     },
     "android": {
       "package": "com.efgtechnologies.zeedmobile",
       "versionCode": 1,
+      "adaptiveIcon": {
+        "foregroundImage": "./assets/adaptive-icon.png",
+        "backgroundColor": "#0F0F12"
+      },
       "intentFilters": [
         {
           "action": "VIEW",
