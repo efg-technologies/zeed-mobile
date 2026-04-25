@@ -13,8 +13,10 @@ WHY ZEED
 
 - Privacy by construction. Memory, bookmarks, tasks, chat history, and
   the Context Map are stored exclusively on your device. Optional
-  telemetry is opt-in and limited to two anonymous events. Browsing
-  URLs, page contents, and chat contents are never transmitted.
+  telemetry is opt-in and limited to a small set of anonymous
+  diagnostic and usage events (install, session start, daily heartbeat,
+  feature counters, agent run outcome, crash hash). Browsing URLs,
+  page contents, and chat contents are never transmitted.
 
 - Three modes for one input. Auto guesses what you want. Ask treats
   the field as a conversation. Search treats it as a query. Move
@@ -66,8 +68,10 @@ PRIVACY
 
 - Data not collected: browsing URLs, page contents, chat contents,
   memory, bookmarks, IP address, email
-- Data collected (anonymous, opt-in): app crashes, agent run outcomes
-  (success / step count / termination reason), version
+- Data collected (anonymous, opt-in): install ID (random UUID),
+  app version, OS, daily heartbeat, session start, feature counters
+  from a fixed allowlist, agent run outcome (success / step count /
+  termination reason), and crash stack hash
 - Telemetry is OFF by default
 - See full policy: https://zeed.run/privacy
 

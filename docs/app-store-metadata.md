@@ -72,6 +72,9 @@ D-U-N-S 取得 → Apple Developer Program 加入 → App Store Connect で
   ```
   (90)
 
+> **メタ**: ロゴ素材は Origami Z (rx 10 / 36×36 box on 64×64) が canonical。
+> App Store Connect 提出時はこの注記行は削除する。
+
 ### Description (4000 char max)
 
 - **EN**: → `app-store-description.en.md`
