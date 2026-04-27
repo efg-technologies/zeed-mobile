@@ -349,18 +349,31 @@ function AppBody() {
     Keyboard.dismiss();
   }, [activeId, updateTab]);
 
-  const observe = useCallback((): Promise<PageObservation> => {
-    const p = new Promise<PageObservation>((resolve, reject) => {
-      const wv = webviewRefs.current[activeId];
-      if (!wv) { reject(new Error('no active webview')); return; }
-      pendingObs.current = (o) => { resolve(o); };
-      logger.debug(`observe → inject read_page (tab ${activeId})`);
-      wv.injectJavaScript(buildReadPageJs(false));
-    });
-    return withTimeout(p, 8000, 'observe').catch((e) => {
-      pendingObs.current = null;
-      throw e;
-    });
+  const observe = useCallback(async (): Promise<PageObservation> => {
+    // Inject read_page and wait for postMessage. Heavy SPAs (e.g. cloudflare
+    // dashboard) on slow mobile networks can take 10+s before the bridge has
+    // booted and returned content. The injected JS already polls until the
+    // DOM is past 'loading' with body children, so this timeout is the
+    // outer ceiling. On miss, retry once before giving up to the loop.
+    const tryOnce = (): Promise<PageObservation> => {
+      const p = new Promise<PageObservation>((resolve, reject) => {
+        const wv = webviewRefs.current[activeId];
+        if (!wv) { reject(new Error('no active webview')); return; }
+        pendingObs.current = (o) => { resolve(o); };
+        logger.debug(`observe → inject read_page (tab ${activeId})`);
+        wv.injectJavaScript(buildReadPageJs(false));
+      });
+      return withTimeout(p, 15000, 'observe').catch((e) => {
+        pendingObs.current = null;
+        throw e;
+      });
+    };
+    try {
+      return await tryOnce();
+    } catch (e) {
+      logger.warn(`observe retry after: ${e instanceof Error ? e.message : String(e)}`);
+      return await tryOnce();
+    }
   }, [activeId]);
 
   const act = useCallback(async (action: AgentAction): Promise<{ ok: boolean; error?: string }> => {

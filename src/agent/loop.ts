@@ -157,10 +157,32 @@ export async function runAgent(
     try {
       observation = await deps.observe();
     } catch (e) {
-      return {
-        ok: false, summary: '', steps,
-        error: `observe failed: ${e instanceof Error ? e.message : String(e)}`,
+      // A single observe failure is often a transient — page mid-navigation,
+      // network blip on mobile, SPA still booting. Treat it as a soft failure
+      // that counts toward consecutiveFailures rather than aborting the run,
+      // so the next iteration can retry on a settled page.
+      const msg = e instanceof Error ? e.message : String(e);
+      consecutiveFailures++;
+      const step: AgentStep = {
+        index: i,
+        observation: { url: '', title: '', text: '', interactives: [] },
+        action: { tool: 'read_page' },
+        actResult: { ok: false, error: `observe: ${msg}` },
       };
+      steps.push(step);
+      deps.onStep?.(step);
+      if (consecutiveFailures >= MAX_CONSECUTIVE_FAILURES) {
+        return {
+          ok: false, summary: '', steps,
+          error: `observe failed ${consecutiveFailures}x: ${msg}`,
+          suggestAutopilot: true,
+        };
+      }
+      messages.push({
+        role: 'user',
+        content: `Couldn't read the page (${msg}). The page may still be loading; the next turn will retry.`,
+      });
+      continue;
     }
     messages.push({ role: 'user', content: observationToText(observation) });
 
