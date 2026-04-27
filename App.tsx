@@ -15,6 +15,7 @@ import {
 import { StatusBar } from 'expo-status-bar';
 import { WebView, type WebViewMessageEvent, type WebViewNavigation } from 'react-native-webview';
 import * as SecureStore from 'expo-secure-store';
+import * as Clipboard from 'expo-clipboard';
 
 import {
   buildClickByLabelJs, buildClickBySelectorJs, buildReadPageJs,
@@ -110,6 +111,7 @@ import Markdown from 'react-native-markdown-display';
 import Svg, { Circle, Line, Text as SvgText } from 'react-native-svg';
 import { parseAssistantMessage, type Segment, type GraphData } from './src/chat/render.ts';
 import { layoutCircular } from './src/chat/graph.ts';
+import { findLastUserMessageIndex, truncateBeforeIndex } from './src/chat/messages.ts';
 import {
   DEFAULT_PROFILES, defaultGroupFor, type Profile,
 } from './src/profile/types.ts';
@@ -186,6 +188,13 @@ function AppBody() {
   const [messages, setMessages] = useState<Msg[]>([]);
   const [chatPanelOpen, setChatPanelOpen] = useState(false);
   const [busy, setBusy] = useState(false);
+  // Holds the in-flight agent run's controller so the user can stop it.
+  // The signal is propagated into runAgent → reason/research fetches, so
+  // a Stop tap also cancels any pending OpenRouter request that's hung
+  // because the network just dropped.
+  const agentCtrlRef = useRef<AbortController | null>(null);
+  const [toast, setToast] = useState<string | null>(null);
+  const toastTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [lastStep, setLastStep] = useState<string | null>(null);
   const [prevStep, setPrevStep] = useState<string | null>(null);
   const [dots, setDots] = useState('');
@@ -467,13 +476,19 @@ function AppBody() {
     }
     setBusy(true);
     setLastStep('thinking');
+    const userCtrl = new AbortController();
+    agentCtrlRef.current = userCtrl;
     try {
       const result = await runAgent(goal, {
         observe,
         act,
+        signal: userCtrl.signal,
         research: async (query) => {
           logger.info(`research: ${query.slice(0, 120)}`);
           const ctrl = new AbortController();
+          // Stop tap from the user cascades through the run signal.
+          const onUserAbort = () => ctrl.abort();
+          userCtrl.signal.addEventListener('abort', onUserAbort);
           const to = setTimeout(() => ctrl.abort(), 45000);
           try {
             const r = await chat(
@@ -494,7 +509,10 @@ function AppBody() {
             const msg = e instanceof Error ? e.message : String(e);
             logger.error(`research threw: ${msg}`);
             return { result: '', error: msg };
-          } finally { clearTimeout(to); }
+          } finally {
+            clearTimeout(to);
+            userCtrl.signal.removeEventListener('abort', onUserAbort);
+          }
         },
         reason: async (msgs) => {
           // Keep the system prompt + goal + last 6 turns so context stays
@@ -506,12 +524,20 @@ function AppBody() {
           // Single retry on transient network errors — RN 'Network request
           // failed' is often a one-off DNS / TLS hiccup.
           for (let attempt = 1; attempt <= 2; attempt++) {
+            if (userCtrl.signal.aborted) {
+              return { response: '', error: 'aborted by user' };
+            }
             const ctrl = new AbortController();
+            const onUserAbort = () => ctrl.abort();
+            userCtrl.signal.addEventListener('abort', onUserAbort);
             const to = setTimeout(() => ctrl.abort(), 60000);
             logger.debug(`chat → openrouter (${trimmed.length} msgs, try ${attempt}/2)`);
             try {
               const r = await chat(apiKey, trimmed, { signal: ctrl.signal });
               if (r.error) {
+                if (userCtrl.signal.aborted) {
+                  return { response: '', error: 'aborted by user' };
+                }
                 const transient = /network|timeout|fetch/i.test(r.error);
                 if (transient && attempt === 1) {
                   logger.warn(`chat transient error (retry): ${r.error}`);
@@ -525,6 +551,9 @@ function AppBody() {
               return { response: r.response, error: null };
             } catch (e) {
               const msg = e instanceof Error ? e.message : String(e);
+              if (userCtrl.signal.aborted) {
+                return { response: '', error: 'aborted by user' };
+              }
               if (attempt === 1) {
                 logger.warn(`chat threw (retry): ${msg}`);
                 await new Promise((res) => setTimeout(res, 1000));
@@ -532,7 +561,10 @@ function AppBody() {
               }
               logger.error(`chat threw: ${msg}`);
               return { response: '', error: `chat failed: ${msg}` };
-            } finally { clearTimeout(to); }
+            } finally {
+              clearTimeout(to);
+              userCtrl.signal.removeEventListener('abort', onUserAbort);
+            }
           }
           return { response: '', error: 'chat failed: all retries exhausted' };
         },
@@ -568,11 +600,53 @@ function AppBody() {
       }
       setMessages((m) => [...m, { role: 'assistant', content: `error: ${msg}` }]);
     } finally {
+      agentCtrlRef.current = null;
       setBusy(false);
       setLastStep(null);
       setPrevStep(null);
     }
   }, [busy, observe, act, telemetryDeps]);
+
+  // Stop the in-flight agent run. AbortController.abort() cascades into
+  // the OpenRouter fetch and the loop's signal check, so the busy state
+  // unwinds within a few hundred ms even when the network is dead.
+  const stopAgent = useCallback(() => {
+    const ctrl = agentCtrlRef.current;
+    if (!ctrl) return;
+    logger.info('agent: stop requested by user');
+    ctrl.abort();
+  }, []);
+
+  const showToast = useCallback((text: string) => {
+    setToast(text);
+    if (toastTimerRef.current) clearTimeout(toastTimerRef.current);
+    toastTimerRef.current = setTimeout(() => setToast(null), 1500);
+  }, []);
+
+  const onMessageLongPress = useCallback((idx: number) => {
+    const m = messages[idx];
+    if (!m) return;
+    const lastUserIdx = findLastUserMessageIndex(messages);
+    const buttons: Array<{ text: string; style?: 'cancel' | 'default' | 'destructive'; onPress?: () => void }> = [
+      { text: 'Copy', onPress: () => {
+        Clipboard.setStringAsync(m.content).catch(() => { /* ignore */ });
+        showToast('Copied');
+      } },
+    ];
+    if (m.role === 'user' && idx === lastUserIdx && !busy) {
+      buttons.push({ text: 'Edit & resend', onPress: () => {
+        // The chat input doubles as the omnibox: pasting the prompt back
+        // there lets the user tweak it and tap → to re-run on the same
+        // mode (auto / ask). Drop everything from this turn forward so
+        // the next run starts from a clean assistant context.
+        setUrlInput(m.content);
+        setMessages((prev) => truncateBeforeIndex(prev, idx));
+        setChatPanelOpen(true);
+      } });
+    }
+    buttons.push({ text: 'Cancel', style: 'cancel' });
+    Alert.alert('Message', undefined, buttons);
+  }, [messages, busy, showToast]);
 
   const runAskFromOmnibox = useCallback(async () => {
     const goal = urlInput.trim();
@@ -780,17 +854,27 @@ function AppBody() {
     if (m.role === 'assistant') {
       const segments = parseAssistantMessage(m.content);
       return (
-        <View key={i} style={[styles.msg, styles.msgBot]}>
+        <Pressable
+          key={i}
+          onLongPress={() => onMessageLongPress(i)}
+          delayLongPress={350}
+          style={[styles.msg, styles.msgBot]}
+        >
           {segments.map((seg, j) => renderSegment(seg, `${i}:${j}`))}
-        </View>
+        </Pressable>
       );
     }
     return (
-      <View key={i} style={[styles.msg, m.role === 'user' ? styles.msgUser : styles.msgSystem]}>
+      <Pressable
+        key={i}
+        onLongPress={() => onMessageLongPress(i)}
+        delayLongPress={350}
+        style={[styles.msg, m.role === 'user' ? styles.msgUser : styles.msgSystem]}
+      >
         <Text style={styles.msgText}>{m.content}</Text>
-      </View>
+      </Pressable>
     );
-  }), [messages]);
+  }), [messages, onMessageLongPress]);
 
   return (
     <View style={[styles.root, { paddingTop: insets.top }]}>
@@ -1045,6 +1129,11 @@ function AppBody() {
             })}
           </ScrollView>
         )}
+        {toast && (
+          <View pointerEvents="none" style={styles.toast}>
+            <Text style={styles.toastText}>{toast}</Text>
+          </View>
+        )}
         <View style={[styles.bottomStack, { paddingBottom: insets.bottom }]}>
         {!activeProfile.private && <View style={styles.modeBar}>
           {(['auto', 'ask', 'search'] as const).map((m) => (
@@ -1087,13 +1176,23 @@ function AppBody() {
               </Pressable>
             )}
           </View>
-          <Pressable
-            onPress={onOmniboxPrimary}
-            disabled={busy || !urlInput.trim()}
-            style={[styles.omniBtn, (busy || !urlInput.trim()) && styles.omniBtnDisabled]}
-          >
-            <Text style={styles.omniBtnText}>→</Text>
-          </Pressable>
+          {busy ? (
+            <Pressable
+              onPress={stopAgent}
+              style={[styles.omniBtn, styles.omniBtnStop]}
+              accessibilityLabel="Stop agent"
+            >
+              <Text style={styles.omniBtnText}>■</Text>
+            </Pressable>
+          ) : (
+            <Pressable
+              onPress={onOmniboxPrimary}
+              disabled={!urlInput.trim()}
+              style={[styles.omniBtn, !urlInput.trim() && styles.omniBtnDisabled]}
+            >
+              <Text style={styles.omniBtnText}>→</Text>
+            </Pressable>
+          )}
         </View>
         <View style={styles.toolBar}>
           <Pressable onPress={goBack} disabled={!canGoBackEffective} style={styles.toolBtn}>
@@ -1796,7 +1895,16 @@ const styles = StyleSheet.create({
     justifyContent: 'center', alignItems: 'center',
   },
   omniBtnDisabled: { backgroundColor: '#2A2A30' },
+  omniBtnStop: { backgroundColor: '#7F1D1D' },
   omniBtnText: { color: '#fff', fontSize: 18, fontWeight: '700' },
+
+  toast: {
+    position: 'absolute', bottom: 96, alignSelf: 'center',
+    backgroundColor: 'rgba(20,20,24,0.92)',
+    paddingHorizontal: 14, paddingVertical: 8, borderRadius: 12,
+    borderWidth: 1, borderColor: '#2A2A30',
+  },
+  toastText: { color: '#E8E8EE', fontSize: 13, fontWeight: '600' },
 
   toolBar: {
     flexDirection: 'row', alignItems: 'center',
