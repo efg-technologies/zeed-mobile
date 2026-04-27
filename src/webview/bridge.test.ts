@@ -68,3 +68,10 @@ test('buildReadPageJs: posts back via ReactNativeWebView.postMessage', () => {
   assert.match(js, /window\.ReactNativeWebView\.postMessage/);
   assert.match(js, /type:'read_page'/);
 });
+
+test('buildReadPageJs: defers read until DOM is past loading + body populated', () => {
+  const js = buildReadPageJs();
+  assert.match(js, /document\.readyState==='loading'/);
+  assert.match(js, /document\.body\.childElementCount===0/);
+  assert.match(js, /setInterval/);
+});

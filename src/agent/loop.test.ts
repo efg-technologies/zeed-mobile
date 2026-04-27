@@ -207,3 +207,34 @@ test('runAgent: research with no dep wired is degraded, not fatal', async () => 
   });
   assert.equal(r.ok, true);
 });
+
+test('runAgent: 1 observe failure is soft — run continues on retry', async () => {
+  let obsCalls = 0;
+  const r = await runAgent('open dash', {
+    observe: async () => {
+      obsCalls++;
+      if (obsCalls === 1) throw new Error('observe timed out (15000ms)');
+      return obs();
+    },
+    act: async () => ({ ok: true }),
+    reason: async () => ({ response: '{"tool":"finish","summary":"got there"}', error: null }),
+  });
+  assert.equal(r.ok, true);
+  assert.equal(obsCalls, 2);
+  // First step is the soft-failure observation, second is the finish.
+  assert.equal(r.steps.length, 2);
+  assert.equal(r.steps[0]!.actResult.ok, false);
+  assert.match(r.steps[0]!.actResult.error ?? '', /observe:/);
+});
+
+test('runAgent: 3 consecutive observe failures suggest autopilot', async () => {
+  const r = await runAgent('open dash', {
+    observe: async () => { throw new Error('network down'); },
+    act: async () => ({ ok: true }),
+    reason: async () => ({ response: '{"tool":"finish"}', error: null }),
+  });
+  assert.equal(r.ok, false);
+  assert.equal(r.suggestAutopilot, true);
+  assert.match(r.error ?? '', /observe failed 3x/);
+  assert.equal(r.steps.length, 3);
+});

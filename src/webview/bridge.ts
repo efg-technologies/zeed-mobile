@@ -57,55 +57,78 @@ export function buildClickBySelectorJs(selector: string): string {
 
 /** Build JS that reads the page and POSTS an observation back to RN via
  * window.ReactNativeWebView.postMessage. The App-side onMessage handler
- * expects { type:'read_page', url, title, text, interactives }. */
+ * expects { type:'read_page', url, title, text, interactives }.
+ *
+ * Defers the read until the document is past 'loading' AND body has
+ * children. SPAs (e.g. dash.cloudflare.com) mount content after the
+ * initial parse, so a synchronous read on a still-booting bundle would
+ * postMessage an empty payload — or, if invoked before the page bridge
+ * is set up, never postMessage at all and trigger the App-side timeout.
+ * Polls up to ~10s; after that, fires a final read so the agent at
+ * least gets *something* (likely empty) instead of a hard timeout. */
 export function buildReadPageJs(interactiveOnly = false): string {
   const IO = interactiveOnly ? 'true' : 'false';
   return `(function(){
-  try {
-    var interactiveOnly=${IO};
-    function textOf(el){
-      var t=(el.getAttribute('aria-label')||'').trim();
-      if(!t) t=(el.innerText||el.textContent||'').replace(/\\s+/g,' ').trim();
-      if(!t) t=(el.getAttribute('title')||el.getAttribute('alt')||el.value||'').trim();
-      return t.slice(0,120);
-    }
-    function roleOf(el){
-      var r=(el.getAttribute('role')||'').toLowerCase(); if(r) return r;
-      var tag=el.tagName.toLowerCase();
-      if(tag==='a') return 'link';
-      if(tag==='button'||tag==='summary') return 'button';
-      if(tag==='input'){ var t=(el.getAttribute('type')||'').toLowerCase(); return t==='submit'||t==='button'?'button':(t||'input'); }
-      return tag;
-    }
-    var selectors='a[href],button,[role="button"],[role="link"],input,select,textarea,summary';
-    var inters=[];
-    document.querySelectorAll(selectors).forEach(function(el,i){
-      if(inters.length>=80) return;
-      el.setAttribute('data-zeed-ref',String(i));
-      var label=textOf(el);
-      if(!label) return;
-      inters.push({ref:String(i),role:roleOf(el),label:label});
-    });
-    var text='';
-    if(!interactiveOnly){
-      var main=document.querySelector('main,article,body');
-      text=((main&&(main.innerText||main.textContent))||'').replace(/\\s+/g,' ').slice(0,4000);
-    }
-    var payload={
-      type:'read_page',
-      url:location.href,
-      title:(document.title||'').slice(0,200),
-      text:text,
-      interactives:inters
-    };
-    window.ReactNativeWebView.postMessage(JSON.stringify(payload));
-  } catch(e) {
+  var interactiveOnly=${IO};
+  function ready(){
+    if(document.readyState==='loading') return false;
+    if(!document.body || document.body.childElementCount===0) return false;
+    return true;
+  }
+  function run(){
     try {
-      window.ReactNativeWebView.postMessage(JSON.stringify({
-        type:'read_page',url:location.href,title:'',text:'',interactives:[],
-        error:(e&&e.message?e.message:String(e))
-      }));
-    } catch(_) {}
+      function textOf(el){
+        var t=(el.getAttribute('aria-label')||'').trim();
+        if(!t) t=(el.innerText||el.textContent||'').replace(/\\s+/g,' ').trim();
+        if(!t) t=(el.getAttribute('title')||el.getAttribute('alt')||el.value||'').trim();
+        return t.slice(0,120);
+      }
+      function roleOf(el){
+        var r=(el.getAttribute('role')||'').toLowerCase(); if(r) return r;
+        var tag=el.tagName.toLowerCase();
+        if(tag==='a') return 'link';
+        if(tag==='button'||tag==='summary') return 'button';
+        if(tag==='input'){ var t=(el.getAttribute('type')||'').toLowerCase(); return t==='submit'||t==='button'?'button':(t||'input'); }
+        return tag;
+      }
+      var selectors='a[href],button,[role="button"],[role="link"],input,select,textarea,summary';
+      var inters=[];
+      document.querySelectorAll(selectors).forEach(function(el,i){
+        if(inters.length>=80) return;
+        el.setAttribute('data-zeed-ref',String(i));
+        var label=textOf(el);
+        if(!label) return;
+        inters.push({ref:String(i),role:roleOf(el),label:label});
+      });
+      var text='';
+      if(!interactiveOnly){
+        var main=document.querySelector('main,article,body');
+        text=((main&&(main.innerText||main.textContent))||'').replace(/\\s+/g,' ').slice(0,4000);
+      }
+      var payload={
+        type:'read_page',
+        url:location.href,
+        title:(document.title||'').slice(0,200),
+        text:text,
+        interactives:inters
+      };
+      window.ReactNativeWebView.postMessage(JSON.stringify(payload));
+    } catch(e) {
+      try {
+        window.ReactNativeWebView.postMessage(JSON.stringify({
+          type:'read_page',url:location.href,title:'',text:'',interactives:[],
+          error:(e&&e.message?e.message:String(e))
+        }));
+      } catch(_) {}
+    }
+  }
+  if(ready()){ run(); }
+  else {
+    var attempts=0;
+    var iv=setInterval(function(){
+      attempts++;
+      if(ready() || attempts>=40){ clearInterval(iv); run(); }
+    }, 250);
   }
   true;
 })();`;
