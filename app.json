@@ -32,8 +32,7 @@
           }
         ],
         "LSApplicationQueriesSchemes": ["http", "https"]
-      },
-      "associatedDomains": ["applinks:zeed.run"]
+      }
     },
     "android": {
       "package": "com.efgtechnologies.zeedmobile",
