@@ -11,7 +11,9 @@
       "resizeMode": "contain",
       "backgroundColor": "#0f0f12"
     },
-    "assetBundlePatterns": ["**/*"],
+    "assetBundlePatterns": [
+      "**/*"
+    ],
     "ios": {
       "supportsTablet": true,
       "bundleIdentifier": "com.efgtechnologies.zeedmobile",
@@ -28,12 +30,20 @@
         "CFBundleURLTypes": [
           {
             "CFBundleURLName": "com.efgtechnologies.zeedmobile.web",
-            "CFBundleURLSchemes": ["http", "https"]
+            "CFBundleURLSchemes": [
+              "http",
+              "https"
+            ]
           }
         ],
-        "LSApplicationQueriesSchemes": ["http", "https"]
+        "LSApplicationQueriesSchemes": [
+          "http",
+          "https"
+        ]
       },
-      "associatedDomains": ["applinks:zeed.run"]
+      "associatedDomains": [
+        "applinks:zeed.run"
+      ]
     },
     "android": {
       "package": "com.efgtechnologies.zeedmobile",
@@ -47,17 +57,25 @@
           "action": "VIEW",
           "autoVerify": true,
           "data": [
-            { "scheme": "http" },
-            { "scheme": "https" }
+            {
+              "scheme": "http"
+            },
+            {
+              "scheme": "https"
+            }
           ],
-          "category": ["BROWSABLE", "DEFAULT"]
+          "category": [
+            "BROWSABLE",
+            "DEFAULT"
+          ]
         }
       ]
     },
     "extra": {
       "eas": {
-        "projectId": ""
+        "projectId": "008d9330-f46b-454e-ae6b-6e8f7f076c85"
       }
-    }
+    },
+    "owner": "tsuyoshi.nagamine"
   }
 }
