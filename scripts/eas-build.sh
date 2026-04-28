@@ -54,6 +54,32 @@ if [[ -z "${EXPO_TOKEN:-}" ]]; then
   export EXPO_TOKEN
 fi
 
+# ── ASC API key を build 用 credentials autosetup にも流す ──
+# eas.json の submit.production.ios.* を読んで EXPO_ASC_* env vars を生成。
+# これで eas-cli が Distribution Certificate / Provisioning Profile を
+# Apple ID 対話なし (ASC API key) で発行できる。
+# 初回のみ `eas credentials -p ios` を対話で 1 回走らせる必要があるが、
+# それ以降の build は完全に non-interactive で回る。
+if [[ -z "${EXPO_ASC_API_KEY_PATH:-}" ]]; then
+  eval "$(python3 - <<'PY'
+import json
+with open('eas.json') as f:
+    cfg = json.load(f)
+ios = cfg.get('submit', {}).get('production', {}).get('ios', {})
+m = {
+  'EXPO_ASC_API_KEY_PATH': ios.get('ascApiKeyPath'),
+  'EXPO_ASC_KEY_ID':       ios.get('ascApiKeyId'),
+  'EXPO_ASC_ISSUER_ID':    ios.get('ascApiKeyIssuerId'),
+  'EXPO_APPLE_TEAM_ID':    ios.get('appleTeamId'),
+  'EXPO_APPLE_TEAM_TYPE':  'COMPANY_OR_ORGANIZATION',
+}
+for k, v in m.items():
+    if v:
+        print(f'export {k}={v!r}')
+PY
+)"
+fi
+
 eas_cli="npx eas-cli@latest"
 
 case "$cmd" in

@@ -56,8 +56,9 @@
     },
     "extra": {
       "eas": {
-        "projectId": ""
+        "projectId": "008d9330-f46b-454e-ae6b-6e8f7f076c85"
       }
-    }
+    },
+    "owner": "tsuyoshi.nagamine"
   }
 }
