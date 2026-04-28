@@ -42,6 +42,24 @@ eas credentials                           # 証明書 + プロビジョニング
 
 ## 3. iOS Build を出す
 
+### 3a. 自動化 path (推奨)
+
+EXPO_TOKEN を 1Password に保存しておくと、対話なしで build → submit まで一発で走る。
+
+前提:
+- 1Password に `Expo zeed-ci EXPO_TOKEN` を Password category で保存済
+- `eval $(op signin)` 済 (1Password CLI サインイン)
+
+```sh
+./scripts/eas-build.sh release production    # build → TestFlight 自動 submit
+./scripts/eas-build.sh build development     # 実機 sideload 用 dev client
+./scripts/eas-build.sh build preview         # internal distribution
+```
+
+詳細は `scripts/eas-build.sh` のヘッダ参照。
+
+### 3b. 手動 path (fallback)
+
 ```sh
 eas build --platform ios --profile production
 ```
